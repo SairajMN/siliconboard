@@ -1,0 +1,30 @@
+$ .venv/bin/python -m py_compile llm.py main.py tests/check_llm.py && echo COMPILE-OK
+COMPILE-OK
+
+$ .venv/bin/python tests/check_llm.py
+llm: 6 output schemas convert cleanly (no refs, no anyOf)
+
+$ .venv/bin/python tests/run_all.py
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly (no refs, no anyOf)
+agents: spec agent refuses an empty request without touching the network
+
+4 check files passed
+
+$ .venv/bin/python main.py doctor
+python   3.14.3 on arm64
+key gemini:1  AQ.A...Qg (53 chars)
+key gemini:2  AQ.A...4A (53 chars)
+key gemini:3  AQ.A...oA (53 chars)
+key gemini:4  AQ.A...qA (53 chars)
+key groq:  none (fallback chain skips it)
+key nvidia:  none (fallback chain skips it)
+tool     Yosys 0.33 (git sha1 2584903a060)
+tool     Verilator 5.020 2024-01-01 rev (Debian 5.020-1)
+tool     Icarus Verilog version 12.0 (stable) ()
+
+doctor: ready
+
+$ grep -c "gemini:\|groq:\|nvidia:" llm.py
+8

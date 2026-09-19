@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+runs/
+pdk/
+obj_dir/
+*.vvp
+*.vcd
+demo/golden/

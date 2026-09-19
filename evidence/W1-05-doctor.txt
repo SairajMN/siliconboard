@@ -1,0 +1,8 @@
+$ .venv/bin/python main.py doctor
+python   3.14.3 on arm64
+keys     none found: put GEMINI_API_KEY_1..4 in .env
+tool     Yosys 0.33 (git sha1 2584903a060)
+tool     Verilator 5.020 2024-01-01 rev (Debian 5.020-1)
+tool     Icarus Verilog version 12.0 (stable) ()
+
+doctor: ready (except keys)

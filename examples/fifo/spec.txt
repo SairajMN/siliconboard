@@ -1,0 +1,6 @@
+Design a synchronous FIFO, 8 entries deep and 8 bits wide, in a single clock
+domain. It needs an active-low synchronous reset, a write enable, a read
+enable, 8-bit data in, 8-bit data out, and full and empty flags. If a write
+and a read happen in the same cycle it must behave normally: store the new
+word and present the oldest word on the output. No almost-full or almost-empty
+flags, and no first-word-fall-through behavior. Target frequency is 150 MHz.

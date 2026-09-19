@@ -1,0 +1,2 @@
+$ .venv/bin/python tests/check_parsers.py
+parsers: all checks pass

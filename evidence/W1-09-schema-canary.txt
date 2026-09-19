@@ -1,0 +1,2 @@
+$ .venv/bin/python tests/check_llm.py
+llm: 6 output schemas convert cleanly (no refs, no anyOf)

@@ -1,0 +1,2 @@
+$ .venv/bin/python tests/check_agents.py
+agents: spec agent refuses an empty request without touching the network
