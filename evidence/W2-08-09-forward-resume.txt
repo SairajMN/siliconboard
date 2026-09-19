@@ -1,0 +1,93 @@
+module  up_counter, 4 ports
+rtl     v1, 17 lines
+synth   24 cells
+event   06:58:04 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+event   06:58:07 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+event   06:58:08 [linting] lint: clean, 0 warnings
+event   06:58:13 [writing_testbench] testbench: tb_up_counter, 56 lines
+event   06:58:15 [simulating] sim: checks=3 failed=0 verdict=True
+event   06:58:16 [synthesizing] synth: 24 cells
+llm     spec groq:openai/gpt-oss-20b slot=1 in=721 out=577 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=771 out=550 cached=False
+llm     testbench groq:openai/gpt-oss-20b slot=3 in=849 out=2945 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w2-counter/board.json
+exit=0
+
+# resume test: fresh run-id, stop after rtl, then re-invoke the same run-id
+
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w2-resume --stop-after rtl
+module  up_counter, 4 ports
+rtl     v1, 16 lines
+event   06:59:03 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+event   06:59:07 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+llm     spec groq:openai/gpt-oss-20b slot=1 in=721 out=1085 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=793 out=731 cached=False
+status  linting
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w2-resume/board.json
+exit=0
+
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w2-resume   # resume from board.json
+resumed /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w2-resume/board.json at linting
+module  up_counter, 4 ports
+rtl     v1, 16 lines
+failed  compile_failed
+event   06:59:03 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+event   06:59:07 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+event   06:59:44 [linting] lint: clean, 0 warnings
+event   06:59:48 [writing_testbench] testbench: tb_up_counter, 1 lines
+event   06:59:48 [simulating] sim: compile failed
+llm     spec groq:openai/gpt-oss-20b slot=1 in=721 out=1085 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=793 out=731 cached=False
+llm     testbench gemini:gemini-3.1-flash-lite slot=2 in=739 out=442 cached=False
+status  failed
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w2-resume/board.json
+exit=1
+
+$ .venv/bin/python tests/run_all.py  # after the short-TB gate
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly (no refs, no anyOf)
+agents: spec/rtl/testbench gates verified offline (llm faked, no network)
+
+4 check files passed
+exit=0
+
+# ---- W2-01 / W2-03 / W2-08 / W2-09: live forward run, quality findings ----
+
+$ # counter, fresh run-id, no --stop-after
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w2-counter
+  status=done exit=0  (evidence above)
+
+$ # the tool caught a semantically wrong testbench that passed every structural gate
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w2-repair
+status failed
+  07:17:29 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+  07:17:33 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+  07:17:33 [linting] lint: clean, 0 warnings
+  07:17:44 [writing_testbench] testbench: tb_up_counter, 86 lines
+  07:17:47 [simulating] sim: checks=3 failed=2 verdict=False
+
+CHECK lines from the real verilator log:
+passed False
+  CHECK reset FAIL
+  CHECK nominal PASS
+  CHECK edge FAIL
+  SUMMARY checks=3 failed=2
+
+diagnosis: the RTL is correct; the generated testbench mis-accounts its cycle counter,
+so the reset check fires after count has already ticked (expects 0, sees 2), and the wrap
+check expects 0 at cycle 258 when 257 mod 256 = 1. Verilator caught what no gate could:
+structural gates check shape, only the simulator checks meaning.
+
+consequence: status=failed and the run stopped BEFORE synthesis. A design whose sim
+failed never reaches the synthesis or timing stages -- the Board advances on tool facts only.
+
+$ .venv/bin/python tests/run_all.py
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly, gate repair loop re-prompts
+agents: spec/rtl/testbench gates verified offline (llm faked, no network)
+
+4 check files passed
+exit=0

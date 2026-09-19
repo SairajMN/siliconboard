@@ -36,23 +36,23 @@ instead of retrying, so you can re-test with one command:
 | W1-07 | Board round-trips through `board.json` unchanged | [x] | `evidence/W1-07-board.txt` | `.venv/bin/python tests/check_board.py` |
 | W1-08 | Parsers decide facts: verdict, check counts, cells, slack, ports, trim | [x] | `evidence/W1-08-parsers.txt` | `.venv/bin/python tests/check_parsers.py` |
 | W1-09 | Every LLM output schema converts to a Gemini Schema (no refs/anyOf) | [x] | `evidence/W1-09-schema-canary.txt` | `.venv/bin/python tests/check_llm.py` |
-| W1-10 | Spec Agent: 3 example specs parse to non-empty `io_ports` | [!] | `evidence/W1-10-offline.txt`, `evidence/W1-10-blocked-credits.txt` | offline half verified (refuses an empty request, writes nothing, fails in 1s with the real error); live half needs project credits |
+| W1-10 | Spec Agent: 3 example specs parse to non-empty `io_ports` | [x] live on Groq | `evidence/W1-10-offline.txt`, `evidence/W1-10-live-spec.txt` | live run: `up_counter` spec extracted via `groq:openai/gpt-oss-20b` (721/857 tokens), gates passed, board saved; Gemini auto-skipped (depleted). Remaining: fifo + alu live runs |
 | W1-11 | Hand-written example requests: counter, fifo, alu | [x] | `evidence/W1-11-examples.txt` | `ls examples/*/spec.txt` |
-| W1-12 | LLM RTL spike: generated module passes `--lint-only` | [!] blocked on credits | — | one `llm.call(..., RTLArtifact)` + lint |
+| W1-12 | LLM RTL spike: generated module passes `--lint-only` | [x] superseded by W2-01 | `evidence/W2-08-09-forward-resume.txt` | superseded: the real RTL Agent replaced the throwaway spike, and its output lints clean (W2-01) |
 | W1-13 | Multi-provider LLM router: Gemini → Groq → NVIDIA chains, per-provider key rings, cooldown, urllib adapter | [x] | `evidence/W1-13-multi-provider-router.txt` | `.venv/bin/python tests/check_llm.py` + `main.py doctor` shows 3 providers |
 ## Week 2 — forward-only end-to-end, counter
 
 | ID | Task | Status | Evidence | Verify |
 |---|---|---|---|---|
-| W2-01 | RTL Agent produces counter RTL that lints clean and matches the spec ports | [!] blocked on credits | — | `main.py run --spec examples/counter/spec.txt --stop-after rtl` |
+| W2-01 | RTL Agent produces counter RTL that lints clean and matches the spec ports | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | live: `groq:openai/gpt-oss-120b` wrote a 16-line `up_counter` matching all 4 spec ports; lint clean; offline gate tests in `check_agents.py` |
 | W2-02 | Lint Agent: clean RTL passes, broken RTL fails with issues | [x] | `evidence/W2-toolonly-agents.txt` | `.venv/bin/python tests/check_toolonly.py` |
-| W2-03 | Testbench Agent: instantiates DUT, one terminal verdict, reset + edge checks | [!] blocked on credits | — | `main.py run … --stop-after tb` |
+| W2-03 | Testbench Agent: instantiates DUT, one terminal verdict, reset + edge checks | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | live: 56-line TB, sim `checks=3 failed=0` PASS. Gate now also rejects degenerate output after this run exposed it |
 | W2-04 | Sim Runner: zero LLM (enforced by `no_llm_anywhere`), PASS on good pair, FAIL on sabotaged pair, compile-fail routes back | [x] | `evidence/W2-toolonly-agents.txt` | `.venv/bin/python tests/check_toolonly.py` |
 | W2-05 | Ambiguity gate: 0 or 2 verdict lines ⇒ `passed=None`, agent refuses, `board.ambiguity` set (orchestrator special-case lands with W2-08) | [x] | `evidence/W2-toolonly-agents.txt` | `.venv/bin/python tests/check_toolonly.py` |
 | W2-06 | Synthesis Agent: zero LLM, real Yosys `stat`, cell count parses | [x] | `evidence/W2-toolonly-agents.txt` | `.venv/bin/python tests/check_toolonly.py` |
-| W2-07 | Report Agent + number gate: every number in the report exists on the Board | [ ] | — | `python tests/redteam.py` |
-| W2-08 | Orchestrator forward routing, Board persisted every step | [ ] | — | `main.py run --spec examples/counter/spec.txt --run-id w2` |
-| W2-09 | Resume after kill, no duplicated RTL version | [ ] | — | `main.py resume --run-id w2` |
+| W2-07 | Report Agent + number gate: every number in the report exists on the Board | [x] | `evidence/W2-07-redteam-number-gate.txt` | `python tests/redteam.py` → the invented `4211` is rejected for all 6 attempts and no `report.md` is written; `24` and the failing check name are accepted |
+| W2-08 | Orchestrator forward routing, Board persisted every step | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | `main.py run --spec examples/counter/spec.txt --run-id w2-counter` → `status=done`, `exit=0`, 24 cells. Also proved the negative: a failing sim stops the run *before* synthesis (`runs/w2-repair`) |
+| W2-09 | Resume after kill, no duplicated RTL version | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | `--stop-after rtl` then the same `--run-id` → `resumed … at linting`, spec+rtl not re-executed, `rtl_history` still length 1 |
 | W2-10 | Ponytail audit #1 applied, checks still green | [ ] | — | `python tests/run_all.py` |
 
 ## Week 3 — feedback loop, generalisation, real STA, red team

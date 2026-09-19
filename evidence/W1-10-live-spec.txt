@@ -1,0 +1,12 @@
+# W1-10 live half: Spec Agent on real keys, Gemini skipped (depleted), Groq served
+
+$ .venv/bin/python main.py spec --file examples/counter/spec.txt --run-id spec-smoke
+spec: up_counter | ports: clk, rst_n, en, count
+llm_calls: [{'role': 'spec', 'model': 'groq:openai/gpt-oss-20b', 'key_slot': 1, 'tokens_in': 721, 'tokens_out': 857, 'cached': False}]
+
+module   up_counter
+ports    clk:input1, rst_n:input1, en:input1, count:output8
+clock    clk, target 200.0 MHz
+llm      spec groq:openai/gpt-oss-20b slot=1 in=721 out=857
+board    /Users/sahil/Desktop/HACKATHON/siliconboard/runs/spec-smoke/board.json
+exit=0

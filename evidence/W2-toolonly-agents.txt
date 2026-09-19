@@ -1,12 +1,13 @@
 $ .venv/bin/python tests/check_toolonly.py
-tool-only agents: lint/sim/synth verified on real docker tools, ambiguity refused, no LLM refs
-exit=0
-
-$ .venv/bin/python tests/run_all.py
-board: round trip and status helpers pass
-parsers: all checks pass
-llm: 6 output schemas convert cleanly (no refs, no anyOf)
-agents: spec agent refuses an empty request without touching the network
-
-4 check files passed
-exit=0
+Traceback (most recent call last):
+  File "/Users/sahil/Desktop/HACKATHON/siliconboard/tests/check_toolonly.py", line 157, in <module>
+    main()
+    ~~~~^^
+  File "/Users/sahil/Desktop/HACKATHON/siliconboard/tests/check_toolonly.py", line 145, in main
+    tb_lint_gate()
+    ~~~~~~~~~~~~^^
+  File "/Users/sahil/Desktop/HACKATHON/siliconboard/tests/check_toolonly.py", line 136, in tb_lint_gate
+    assert tb_lint_problems(good, GOOD_RTL, tmp) == []
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
+exit=1

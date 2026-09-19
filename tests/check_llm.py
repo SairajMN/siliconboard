@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,44 @@ from board import BugReport, DesignSpec, RTLArtifact, TestbenchArtifact, TimingR
 import llm  # noqa: E402  the module itself must import, not just its schemas
 
 SCHEMAS = [DesignSpec, RTLArtifact, TestbenchArtifact, BugReport, TimingReport, RunReport]
+
+
+def repair_loop_reruns_the_gate() -> None:
+    from agents.testbench import tb_problems
+
+    one_line = json.dumps(
+        {"filename": "tb_counter.v", "source_code": "module tb_counter; endmodule", "test_vectors_description": "flat"}
+    )
+    good = json.dumps(
+        {
+            "filename": "tb_counter.v",
+            "source_code": (ROOT / "smoke" / "tb_counter.v").read_text(),
+            "test_vectors_description": "from the smoke fixture",
+        }
+    )
+    prompts: list[str] = []
+
+    def fake_provider(provider, key, model, system, prompt, schema, temperature):
+        prompts.append(prompt)
+        return (one_line, 10, 20) if len(prompts) == 1 else (good, 11, 21)
+
+    original = llm._openai_call
+    llm._openai_call = fake_provider
+    try:
+        result = llm.call(
+            "write a testbench",
+            "system",
+            TestbenchArtifact,
+            "testbench",
+            ["groq:openai/gpt-oss-20b"],
+            validate=lambda artifact: tb_problems(artifact, "counter"),
+        )
+    finally:
+        llm._openai_call = original
+
+    assert isinstance(result, TestbenchArtifact), result
+    assert len(prompts) == 2, "a schema-valid but unusable answer must be re-prompted once"
+    assert "unusable" in prompts[1] and "line(s)" in prompts[1], "the repair prompt must quote the gate"
 
 
 def main() -> None:
@@ -43,7 +82,8 @@ def main() -> None:
         blob = converted.model_dump_json(exclude_none=True)
         for unsupported in ("$ref", "$defs", "anyOf"):
             assert unsupported not in blob, f"{schema.__name__} still contains {unsupported}, Gemini rejects it"
-    print(f"llm: {len(SCHEMAS)} output schemas convert cleanly (no refs, no anyOf)")
+    repair_loop_reruns_the_gate()
+    print(f"llm: {len(SCHEMAS)} output schemas convert cleanly, gate repair loop re-prompts")
 
 
 if __name__ == "__main__":

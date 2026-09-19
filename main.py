@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import sys
 from pathlib import Path
 
 import llm
-from agents.spec import SpecAgent
-from board import Board
+from agents.report import ReportAgent
+from agents.spec import SpecAgent  # noqa: F401  kept: doctor and docs reference the first agent
+from board import Board, DesignStatus
+from orchestrator import Orchestrator
 from tools import IMAGE, run_eda
 
 ROOT = Path(__file__).resolve().parent
@@ -64,28 +67,75 @@ def doctor() -> int:
     return 0
 
 
-def run_spec(request_file: Path, run_id: str) -> int:
-    board = Board(request=request_file.read_text())
+def _report(board: Board, run_dir: Path) -> None:
+    for line in board.event_log:
+        print(f"event   {line}")
+    for call in board.llm_calls:
+        print(f"llm     {call.role} {call.model} slot={call.key_slot} in={call.tokens_in} out={call.tokens_out} cached={call.cached}")
+    print(f"status  {board.status.value}")
+    print(f"board   {run_dir / 'board.json'}")
+
+
+def acquire_lock(run_dir: Path) -> bool:
+    """Two runs writing one run dir interleave their event logs; the audit trail must reject that."""
+    run_dir.mkdir(parents=True, exist_ok=True)
+    lock = run_dir / "run.lock"
+    if lock.exists():
+        holder = lock.read_text().strip()
+        if holder.isdigit() and Path(f"/proc/{holder}").exists():
+            print(f"refusing: pid {holder} is already writing {run_dir}")
+            return False
+        # a lock from a machine with no /proc, or from a dead process, is stale
+        alive = subprocess.run(["ps", "-p", holder], capture_output=True, text=True).returncode == 0
+        if holder.isdigit() and alive:
+            print(f"refusing: pid {holder} is already writing {run_dir}")
+            return False
+    lock.write_text(str(os.getpid()))
+    return True
+
+
+def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None) -> int:
     run_dir = ROOT / "runs" / run_id
+    if not acquire_lock(run_dir):
+        return 1
     llm.set_cache_dir(run_dir / "llm")
 
-    result = SpecAgent().run(board)
+    if (run_dir / "board.json").exists():
+        board = Board.load(run_dir)
+        print(f"resumed {run_dir / 'board.json'} at {board.status.value}")
+    else:
+        board = Board(request=spec_file.read_text())
+
+    result = Orchestrator(board, run_dir).run(stop_after)
+
+    # narration runs only on a finished design, and its failure never reverses a tool verdict
+    if board.finished and board.status != DesignStatus.FAILED and board.run_report is None:
+        narrator = ReportAgent()
+        narrator.run_dir = run_dir
+        narrated = narrator.run(board)
+        if not narrated.ok:
+            print(f"report  failed: {narrated.err}")
     board.save(run_dir)
 
-    if result.ok and board.spec:
-        spec = board.spec
-        print(f"module   {spec.name}")
-        print(f"ports    {', '.join(f'{p.name}:{p.direction}{p.width or ''}' for p in spec.io_ports)}")
-        print(f"clock    {spec.clock_domain}, target {spec.target_freq_mhz} MHz")
-        for line in spec.assumptions:
-            print(f"assumed  {line}")
-    else:
-        print(f"failed   {result.err}")
+    if board.spec:
+        print(f"module  {board.spec.name}, {len(board.spec.io_ports)} ports")
+    if board.latest_rtl:
+        print(f"rtl     v{board.latest_rtl.version}, {len(board.latest_rtl.source_code.splitlines())} lines")
+    if board.synthesis_report and board.synthesis_report.cell_count is not None:
+        print(f"synth   {board.synthesis_report.cell_count} cells")
+    if board.run_report is not None:
+        print(f"report  {run_dir / 'report.md'}")
+    if result is not None and not result.ok:
+        print(f"failed  {result.err}")
+    _report(board, run_dir)
 
-    for call in board.llm_calls:
-        print(f"llm      {call.role} {call.model} slot={call.key_slot} in={call.tokens_in} out={call.tokens_out}")
-    print(f"board    {run_dir / 'board.json'}")
-    return 0 if result.ok else 1
+    stopped_cleanly = result is not None and result.ok
+    finished_cleanly = result is None and board.finished and board.status != DesignStatus.FAILED
+    return 0 if stopped_cleanly or finished_cleanly else 1
+
+
+def run_spec(request_file: Path, run_id: str) -> int:
+    return run_pipeline(request_file, run_id, "spec")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,15 +143,22 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="check python, keys, docker image and EDA tool versions")
 
-    spec_cmd = sub.add_parser("spec", help="run the Spec Agent against a request file")
+    spec_cmd = sub.add_parser("spec", help="run only the Spec Agent against a request file")
     spec_cmd.add_argument("--file", type=Path, required=True)
     spec_cmd.add_argument("--run-id", default="spec")
+
+    run_cmd = sub.add_parser("run", help="run the pipeline from the spec (or resume an existing run)")
+    run_cmd.add_argument("--spec", type=Path, required=True)
+    run_cmd.add_argument("--run-id", required=True)
+    run_cmd.add_argument("--stop-after", choices=["spec", "rtl", "lint", "tb", "sim", "synth"])
 
     args = parser.parse_args(argv)
     if args.command == "doctor":
         return doctor()
     if args.command == "spec":
         return run_spec(args.file, args.run_id)
+    if args.command == "run":
+        return run_pipeline(args.spec, args.run_id, args.stop_after)
     return 2
 
 

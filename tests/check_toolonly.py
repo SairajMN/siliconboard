@@ -15,6 +15,7 @@ from agent import AgentResult  # noqa: E402
 from agents.lint import LintAgent  # noqa: E402
 from agents.simrunner import SimRunnerAgent  # noqa: E402
 from agents.synth import SynthesisAgent  # noqa: E402
+from agents.testbench import tb_lint_problems  # noqa: E402
 from board import Board, RTLArtifact, TestbenchArtifact  # noqa: E402
 
 RTL_SRC = (ROOT / "smoke" / "counter.v").read_text()
@@ -127,9 +128,21 @@ def missing_inputs_refused() -> None:
     assert not r.ok and "no run_dir" in r.err
 
 
+def tb_lint_gate() -> None:
+    # the real testbench gate: structural problems are free, a compiling one costs one verilator run
+    good = TestbenchArtifact(filename="tb_counter.v", source_code=TB_SRC, test_vectors_description="fixture")
+    broken = good.model_copy(update={"source_code": good.source_code.replace("counter dut", "missing_module dut")})
+    tmp = Path(tempfile.mkdtemp())
+    assert tb_lint_problems(good, GOOD_RTL, tmp) == []
+    problems = tb_lint_problems(broken, GOOD_RTL, tmp)
+    assert problems and "does not compile" in problems[0], problems
+    shutil.rmtree(tmp)
+
+
 def main() -> None:
     lint_ok()
     lint_catches_broken()
+    tb_lint_gate()
     sim_pass()
     sim_catches_bug()
     ambiguous_refused()

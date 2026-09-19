@@ -38,9 +38,13 @@ def simulate(work: Path, rtl_file: str, tb_file: str, top: str) -> tuple[int, st
     return run_eda([f"./obj_dir/V{top}"], work, timeout=120)
 
 
-def lint(work: Path, filename: str, top: str) -> tuple[bool, list[str], str]:
+def lint(work: Path, filenames: str | list[str], top: str, timing: bool = False) -> tuple[bool, list[str], str]:
     # -Wno-fatal keeps style warnings from failing the run; the exit code then means errors only.
-    rc, log = run_eda(["verilator", "--lint-only", "-Wall", "-Wno-fatal", "--top-module", top, filename], work)
+    # a testbench drives the clock with delays, so it needs the same --timing the sim runner uses:
+    # without it verilator reports NEEDTIMINGOPT and a working testbench looks broken
+    files = [filenames] if isinstance(filenames, str) else list(filenames)
+    flags = ["--timing"] if timing else []
+    rc, log = run_eda(["verilator", "--lint-only", "-Wall", "-Wno-fatal", *flags, "--top-module", top, *files], work)
     return rc == 0, problem_lines(log), log
 
 
@@ -62,6 +66,40 @@ def cells_from_stat(log: str) -> int | None:
 def slack_from_sta(log: str) -> float | None:
     m = re.search(r"worst slack\s+(?:max|min)?\s*(-?\d+\.?\d*)", log)
     return float(m.group(1)) if m else None
+
+
+_CHECK_LINE = re.compile(r"^CHECK\s+(\S+)\s+(PASS|FAIL)\s*$", re.M)
+_NUMBER = re.compile(r"\d+(?:\.\d+)?")
+_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.+Z-]+|\b\d{2}:\d{2}:\d{2}\b")
+
+
+def check_results(log: str) -> dict[str, bool]:
+    return {name: word == "PASS" for name, word in _CHECK_LINE.findall(log)}
+
+
+def unbacked_numbers(text: str, facts: str) -> list[str]:
+    """The report may only quote numbers that exist on the Board. Timestamps are not facts."""
+    body = re.sub(r"(?m)^\s*\d+\.\s", " ", text).replace(",", "")
+    claimed = set(_NUMBER.findall(body))
+    known = set(_NUMBER.findall(_STAMP.sub(" ", facts)))
+    return sorted(claimed - known)
+
+
+_ESCAPED_QUOTE = re.compile(r'\\"')
+
+
+def source_shape_problems(source: str, label: str) -> list[str]:
+    """Catches the ways a model returns valid JSON that is not usable Verilog source."""
+    problems: list[str] = []
+    lines = source.splitlines()
+    if len(lines) < 3:
+        problems.append(f"{label} is {len(lines)} line(s): the file must be laid out one statement per line")
+    if _ESCAPED_QUOTE.search(source):
+        problems.append(rf'{label} contains literal \" escapes instead of real quotes')
+    head = lines[0].strip() if lines else ""
+    if head and not head.startswith(("`", "//", "/*", "module")):
+        problems.append(f"{label} starts with prose, not a timescale, comment, or module declaration")
+    return problems
 
 
 def problem_lines(log: str, limit: int = 20) -> list[str]:
