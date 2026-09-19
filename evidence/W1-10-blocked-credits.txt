@@ -1,0 +1,6 @@
+# W1-10 blocked: the four projects have no credits
+
+$ .venv/bin/python main.py spec --file examples/counter/spec.txt --run-id spec-smoke
+failed   spec: project has no credits, retrying cannot help: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'Your prepayment credits are depleted. Please go to AI Studio at https://ai.studio/projects to manage your project and billing. Learn more at https://ai.google.dev/gemini-api/docs/billing#prepay. ', 'status': 'RESOURCE_EXHAUSTED'}}
+board    /Users/sahil/Desktop/HACKATHON/siliconboard/runs/spec-smoke/board.json
+exit=1

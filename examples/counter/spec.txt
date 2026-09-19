@@ -1,0 +1,4 @@
+I need a small 8-bit up counter for a clock divider block. It should have a
+clock and an active-low reset, both synchronous, plus an enable input so the
+counter only advances when enable is high. Output is the current 8-bit count.
+It does not need to wrap or flag overflow. Target clock is 200 MHz.

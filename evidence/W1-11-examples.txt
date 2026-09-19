@@ -1,0 +1,4 @@
+$ ls examples/*/spec.txt
+examples/alu/spec.txt
+examples/counter/spec.txt
+examples/fifo/spec.txt

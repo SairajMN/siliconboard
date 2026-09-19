@@ -1,0 +1,7 @@
+$ .venv/bin/python tests/run_all.py
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly (no refs, no anyOf)
+agents: spec agent refuses an empty request without touching the network
+
+4 check files passed

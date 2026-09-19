@@ -1,0 +1,5 @@
+$ .venv/bin/python tests/check_toolchain.py
+lint: clean, 0 warnings recorded
+lint: style warnings recorded but not fatal
+sim: PASS, 4 checks, 0 failed
+synth: 24 cells

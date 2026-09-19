@@ -1,0 +1,8 @@
+$ docker images --format "{{.Repository}}:{{.Tag}} {{.Size}}" | grep siliconboard
+siliconboard/eda:1.0 707MB
+
+$ docker run --rm siliconboard/eda:1.0 sh -c "uname -m; yosys -V | head -1; verilator --version | head -1; iverilog -V 2>&1 | head -1"
+aarch64
+Yosys 0.33 (git sha1 2584903a060)
+Verilator 5.020 2024-01-01 rev (Debian 5.020-1)
+Icarus Verilog version 12.0 (stable) ()

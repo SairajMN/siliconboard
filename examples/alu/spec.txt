@@ -1,0 +1,6 @@
+Build a purely combinational 8-bit ALU. Inputs are two 8-bit operands a and b,
+plus a 3-bit opcode. Outputs are the 8-bit result and a zero flag that is high
+only when the result is zero. Opcodes: 000 add, 001 subtract a-b, 010 bitwise
+AND, 011 bitwise OR, 100 bitwise XOR, 101 shift a left by one, 110 shift a
+right by one, 111 pass a through unchanged. There is no clock and no reset.
+Target frequency is 100 MHz.

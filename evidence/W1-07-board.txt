@@ -1,0 +1,2 @@
+$ .venv/bin/python tests/check_board.py
+board: round trip and status helpers pass
