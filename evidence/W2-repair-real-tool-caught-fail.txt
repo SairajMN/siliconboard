@@ -1,0 +1,24 @@
+$ .venv/bin/python main.py run --run-id w2-repair  (fresh live run, groq routes, then the sim verdict re-checked)
+
+## board event log
+  07:17:29 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+  07:17:33 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+  07:17:33 [linting] lint: clean, 0 warnings
+  07:17:44 [writing_testbench] testbench: tb_up_counter, 86 lines
+  07:17:47 [simulating] sim: checks=3 failed=2 verdict=False
+  07:38:58 [simulating] sim: checks=2 failed=1 verdict=False
+
+status: failed
+rtl v 1 up_counter
+tb tb_up_counter.v 86 lines
+
+## llm calls
+  spec groq:openai/gpt-oss-20b slot=1 in=721 out=1184 cached=False
+  rtl groq:openai/gpt-oss-120b slot=2 in=801 out=733 cached=False
+  testbench groq:openai/gpt-oss-20b slot=3 in=882 out=7993 cached=False
+
+## real verilator verdict lines
+  CHECK reset PASS
+  CHECK count_three FAIL
+  SUMMARY checks=2 failed=1
+  FAIL

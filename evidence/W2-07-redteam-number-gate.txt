@@ -1,0 +1,13 @@
+$ .venv/bin/python tests/run_all.py
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly, gate repair loop re-prompts
+agents: spec/rtl/testbench gates verified offline (llm faked, no network)
+redteam: invented numbers rejected, backed numbers accepted, failing checks parsed
+
+5 check files passed
+exit=0
+
+$ .venv/bin/python tests/redteam.py
+redteam: invented numbers rejected, backed numbers accepted, failing checks parsed
+exit=0

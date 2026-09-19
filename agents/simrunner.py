@@ -38,4 +38,6 @@ class SimRunnerAgent(BaseAgent):
         if passed is None:
             board.ambiguity = result.ambiguity
             return AgentResult(ok=False, err="ambiguous sim verdict, refusing to guess", log=log)
-        return AgentResult(ok=passed, log=log, note=f"checks={total} failed={failed}")
+        if not passed:
+            return AgentResult(ok=False, err=f"simulator reported FAIL: {failed} of {total} checks failed", log=log)
+        return AgentResult(ok=True, note=f"checks={total} failed={failed}")
