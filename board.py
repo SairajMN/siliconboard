@@ -126,6 +126,7 @@ class Board(BaseModel):
 
     retry_count: int = 0
     max_retries: int = 3
+    stage_retries: dict[str, int] = Field(default_factory=dict)
     ambiguity: str | None = None
     event_log: list[str] = Field(default_factory=list)
     llm_calls: list[LLMCall] = Field(default_factory=list)

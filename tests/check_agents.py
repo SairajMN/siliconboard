@@ -133,7 +133,7 @@ def tb_gate_catches_every_bad_shape() -> None:
         filename="tb_up_counter.v", source_code=LATE_RESET_TB, test_vectors_description="fixture"
     )
     late_problems = tb_problems(late, "up_counter", LATE_RESET_SPEC)
-    assert any("still asserted" in p for p in late_problems), late_problems
+    assert any("released later" in p or "never released" in p for p in late_problems), late_problems
     assert any("truncated" in p for p in late_problems), late_problems
 
     detached = good.model_copy(update={"source_code": TB_SRC.replace("counter dut", "other dut")})

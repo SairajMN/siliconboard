@@ -162,6 +162,22 @@ def rtl_module_name(source: str) -> str | None:
     return m.group(1) if m else None
 
 
+_RESET_IF = [
+    (re.compile(r"if\s*\(\s*[!~]\s*(?:rst|reset)(?:_n|_b|n|b)?\s*\)"), "if (1'b0)"),
+    (re.compile(r"if\s*\(\s*(?:rst|reset)(?:_n|_b|n|b)?\s*==\s*(?:1'b[01]|[01])\s*\)"), "if (1'b0)"),
+    (re.compile(r"if\s*\(\s*(?:rst|reset)(?:_n|_b|n|b)?\s*\)"), "if (1'b0)"),
+]
+
+
+def sabotage_reset(source: str) -> str:
+    """Test-injection helper: neutralise the first reset condition so a real simulation must fail."""
+    for pattern, replacement in _RESET_IF:
+        sabotaged, count = pattern.subn(replacement, source, count=1)
+        if count:
+            return sabotaged
+    raise ValueError("no reset condition found to sabotage")
+
+
 def spec_mismatch(spec: DesignSpec, rtl: RTLArtifact) -> list[str]:
     problems: list[str] = []
     name = rtl_module_name(rtl.source_code)

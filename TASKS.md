@@ -53,13 +53,13 @@ instead of retrying, so you can re-test with one command:
 | W2-07 | Report Agent + number gate: every number in the report exists on the Board | [x] | `evidence/W2-07-redteam-number-gate.txt` | `python tests/redteam.py` → the invented `4211` is rejected for all 6 attempts and no `report.md` is written; `24` and the failing check name are accepted |
 | W2-08 | Orchestrator forward routing, Board persisted every step | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | `main.py run --spec examples/counter/spec.txt --run-id w2-counter` → `status=done`, `exit=0`, 24 cells. Also proved the negative: a failing sim stops the run *before* synthesis (`runs/w2-repair`) |
 | W2-09 | Resume after kill, no duplicated RTL version | [x] live on Groq | `evidence/W2-08-09-forward-resume.txt` | `--stop-after rtl` then the same `--run-id` → `resumed … at linting`, spec+rtl not re-executed, `rtl_history` still length 1 |
-| W2-10 | Ponytail audit #1 applied, checks still green | [ ] | — | `python tests/run_all.py` |
+| W2-10 | Ponytail audit #1 applied, checks still green | [x] | `evidence/W2-10-ponytail-audit.txt` | `python tests/run_all.py` (audit: deleted `dead_providers()`, the only true cut; 2 deps total) |
 
 ## Week 3 — feedback loop, generalisation, real STA, red team
 
 | ID | Task | Status | Verify |
 |---|---|---|---|
-| W3-01 | Debug Agent with `evidence_quote`; fabricated quote is rejected | [ ] | `python tests/redteam.py` |
+| W3-01 | Debug Agent with `evidence_quote`; fabricated quote is rejected | [x] | `evidence/W3-01-debug-agent.txt` | `python tests/redteam.py` (quote must be a verbatim log line; failing_check must be a failed check) |
 | W3-02 | Backward routing: sabotaged counter goes SIM→DEBUG→RTL→DONE, history length 2 | [ ] | `main.py run --spec examples/counter/spec.txt --inject-bug reset` |
 | W3-03 | Retry prompt targets the reported bug, diff ≤10 lines | [ ] | `main.py diff --run-id fifo` |
 | W3-04 | FIFO: real v1 FAIL → cited bug → real v2 PASS | [ ] | `main.py run --spec examples/fifo/spec.txt` |
@@ -99,6 +99,11 @@ instead of retrying, so you can re-test with one command:
 | F9 | `assign undeclared_lhs = 1'b1;` compiles fine — implicit-net rules auto-declare the LHS | a "broken RTL" fixture must break on the RHS; `tests/check_toolonly.py` uses an undeclared RHS identifier |
 | F10 | Simulating with the DUT as `--top-module` compiles but hangs forever: the TB is inert, `$finish` never fires | `SimRunnerAgent` derives the top from the testbench source (`rtl_module_name(tb.source_code)`); sim binary runs under a 120s timeout |
 | F11 | `subprocess.run(timeout=...)` raises `TimeoutExpired` and would crash the agent mid-pipeline | `run_eda` catches it and returns `(124, "timeout after Ns: …")` so a hang becomes a normal failed step with a log |
+| F12 | A stalled Google connection has no SDK default timeout: the pipeline sat 4+ min on one ESTABLISHED socket (`lsof -i` proved it) while spec/RTL completed in 2s | `REQUEST_TIMEOUT=30` wired into `HttpOptions(timeout=ms)` and every `urlopen`; a run can no longer hang on a provider |
+| F13 | On timeout the router used to sleep and retry the *same* model, burning 2 of 6 attempts on a dead endpoint (nvidia: 0 bytes in 25s) | first timeout marks the provider `_dead` for the run and advances the chain; restart re-enables it |
+| F14 | groq `gpt-oss-20b` needed **7069 completion tokens** for one testbench: caps of 2048/4096 truncated the JSON mid-string → deterministic `400 Failed to generate JSON` | initial groq cap is now a measured 8192 (probe: HTTP 200, valid JSON); comment records the measurement, not a guess |
+| F15 | groq "Request too large" limits are **per model** (qwen=936, gpt-oss-20b=7936): `_cap` keyed by provider let qwen's ceiling poison 20b for the rest of the run | `_cap` re-keyed `provider:model`; on 413/429-too-large the measured `Limit N - 64` is adopted and the same route retried (observed live: "cap lowered to 7936, retrying" → success) |
+| F16 | `_trace` truncates errors at 140 chars and Groq's 400 body puts the model's actual bad output in `failed_generation` — the diagnosis field arrived *after* the truncation | `_openai_call` parses the 400 body and puts `failed_generation` FIRST in the message; the chain-exhausted raise now carries the attempts tail |
 
 ## Your rate limits (fill in once, W1-06)
 

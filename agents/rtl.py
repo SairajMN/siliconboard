@@ -40,6 +40,8 @@ class RTLAgent(BaseAgent):
             sections.append(("previous attempt", board.latest_rtl.source_code))
         if board.latest_bug is not None:
             sections.append(("bug report", board.latest_bug.model_dump_json(indent=2)))
+        if board.lint is not None and not board.lint.clean:
+            sections.append(("lint errors", "\n".join(board.lint.issues)))
         sections.append(("task", "Write the complete Verilog-2005 module now, as JSON matching the schema."))
         prompt = build_prompt(*sections)
 

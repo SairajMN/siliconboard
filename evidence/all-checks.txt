@@ -1,7 +1,9 @@
-$ .venv/bin/python tests/run_all.py
+\$ .venv/bin/python tests/run_all.py
 board: round trip and status helpers pass
 parsers: all checks pass
-llm: 6 output schemas convert cleanly (no refs, no anyOf)
-agents: spec agent refuses an empty request without touching the network
+llm: 6 output schemas convert cleanly, gate repair loop re-prompts
+agents: spec/rtl/testbench gates verified offline (llm faked, no network)
+redteam: invented numbers rejected, backed numbers accepted, failing checks parsed
 
-4 check files passed
+5 check files passed
+exit=0

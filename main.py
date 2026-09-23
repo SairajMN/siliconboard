@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import platform
 import subprocess
@@ -13,7 +14,7 @@ import llm
 from agents.report import ReportAgent
 from agents.spec import SpecAgent  # noqa: F401  kept: doctor and docs reference the first agent
 from board import Board, DesignStatus
-from orchestrator import Orchestrator
+from orchestrator import STOP, Orchestrator
 from tools import IMAGE, run_eda
 
 ROOT = Path(__file__).resolve().parent
@@ -94,7 +95,7 @@ def acquire_lock(run_dir: Path) -> bool:
     return True
 
 
-def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None) -> int:
+def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None, inject: str | None = None) -> int:
     run_dir = ROOT / "runs" / run_id
     if not acquire_lock(run_dir):
         return 1
@@ -106,7 +107,7 @@ def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None) -> int:
     else:
         board = Board(request=spec_file.read_text())
 
-    result = Orchestrator(board, run_dir).run(stop_after)
+    result = Orchestrator(board, run_dir, inject=inject).run(stop_after)
 
     # narration runs only on a finished design, and its failure never reverses a tool verdict
     if board.finished and board.status != DesignStatus.FAILED and board.run_report is None:
@@ -138,6 +139,34 @@ def run_spec(request_file: Path, run_id: str) -> int:
     return run_pipeline(request_file, run_id, "spec")
 
 
+def run_diff(run_id: str) -> int:
+    run_dir = ROOT / "runs" / run_id
+    if not (run_dir / "board.json").exists():
+        print(f"no board.json in {run_dir}")
+        return 1
+    board = Board.load(run_dir)
+    if len(board.rtl_history) < 2:
+        print(f"only {len(board.rtl_history)} RTL version(s), nothing to diff")
+        return 1
+    prev, current = board.rtl_history[-2], board.rtl_history[-1]
+    lines = list(
+        difflib.unified_diff(
+            prev.source_code.splitlines(),
+            current.source_code.splitlines(),
+            fromfile=f"{prev.filename} v{prev.version}",
+            tofile=f"{current.filename} v{current.version}",
+            lineterm="",
+        )
+    )
+    print("\n".join(lines))
+    changed = sum(1 for ln in lines if ln.startswith(("+", "-")) and not ln.startswith(("+++", "---")))
+    print(f"\n{changed} changed lines (v{prev.version} -> v{current.version})")
+    for bug in board.bug_history:
+        print(f"bug: {bug.failing_check} — {bug.summary}")
+        print(f"evidence: {bug.evidence_quote}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="siliconboard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -150,7 +179,12 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd = sub.add_parser("run", help="run the pipeline from the spec (or resume an existing run)")
     run_cmd.add_argument("--spec", type=Path, required=True)
     run_cmd.add_argument("--run-id", required=True)
-    run_cmd.add_argument("--stop-after", choices=["spec", "rtl", "lint", "tb", "sim", "synth"])
+    run_cmd.add_argument("--stop-after", choices=list(STOP))
+    run_cmd.add_argument("--inject-bug", choices=["reset"], default=None,
+                         help="sabotage the generated RTL once, to exercise the debug loop on demand")
+
+    diff_cmd = sub.add_parser("diff", help="diff the last two RTL versions of a run, with its bug reports")
+    diff_cmd.add_argument("--run-id", required=True)
 
     args = parser.parse_args(argv)
     if args.command == "doctor":
@@ -158,7 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "spec":
         return run_spec(args.file, args.run_id)
     if args.command == "run":
-        return run_pipeline(args.spec, args.run_id, args.stop_after)
+        return run_pipeline(args.spec, args.run_id, args.stop_after, args.inject_bug)
+    if args.command == "diff":
+        return run_diff(args.run_id)
     return 2
 
 
