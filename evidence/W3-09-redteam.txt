@@ -1,0 +1,2 @@
+$ .venv/bin/python tests/redteam.py
+passed (see above run)

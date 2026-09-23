@@ -60,15 +60,15 @@ instead of retrying, so you can re-test with one command:
 | ID | Task | Status | Verify |
 |---|---|---|---|
 | W3-01 | Debug Agent with `evidence_quote`; fabricated quote is rejected | [x] | `evidence/W3-01-debug-agent.txt` | `python tests/redteam.py` (quote must be a verbatim log line; failing_check must be a failed check) |
-| W3-02 | Backward routing: sabotaged counter goes SIM→DEBUG→RTL→DONE, history length 2 | [ ] | `main.py run --spec examples/counter/spec.txt --inject-bug reset` |
-| W3-03 | Retry prompt targets the reported bug, diff ≤10 lines | [ ] | `main.py diff --run-id fifo` |
-| W3-04 | FIFO: real v1 FAIL → cited bug → real v2 PASS | [ ] | `main.py run --spec examples/fifo/spec.txt` |
-| W3-05 | ALU reaches DONE or DONE-WITH-WARNING unattended | [ ] | `main.py run --spec examples/alu/spec.txt` |
-| W3-06 | OpenSTA image builds and runs on arm64 and amd64 | [ ] | `docker run --rm siliconboard/sta:1.0 sta -version` |
-| W3-07 | sky130 Liberty downloaded and cached | [ ] | `head -c 40 pdk/*.lib` |
-| W3-08 | Timing Agent: verdict from the parser, LLM only explains | [ ] | `python tests/check_parsers.py` |
-| W3-09 | Red team: fabricated quote, invented cell count, truncated JSON all rejected | [ ] | `python tests/redteam.py` |
-| W3-10 | Ponytail debt ledger, no `no-trigger` markers | [ ] | `grep -rnE '# ponytail:' .` |
+| W3-02 | Backward routing: sabotaged counter goes SIM→DEBUG→RTL→DONE, history length 2 | [x] live on Groq | `main.py run --spec examples/counter/spec.txt --inject-bug reset` → `status=done`, `rtl_history=[1,2]`, `bug_history=1`, sims `(False,12,3)→(True,12,0)`, evidence quote verbatim in raw log (`evidence/W3-02-03-inject-loop.txt`) |
+| W3-03 | Retry prompt targets the reported bug, diff ≤10 lines | [x] live on Groq | `main.py diff --run-id w3-inject`: **6 changed lines** — `- if (1'b0)` → `+ if (!reset_n)` and the overflow guard removed; Debug Agent named both real defects (sabotage + its own v1 wrap bug) |
+| W3-04 | FIFO: real v1 FAIL → cited bug → real v2 PASS | [x] live on Groq | `main.py run --spec examples/fifo/spec.txt` → `done`, **17 real Verilator checks, 0 failed**, 189 cells; TB agent's 135-line TB right first try after the chain fixes (8192 cap / 90s timeout / name-port rules) (`evidence/W3-04-fifo.txt`) |
+| W3-05 | ALU reaches DONE or DONE-WITH-WARNING unattended | [x] live on Groq | `main.py run --spec examples/alu/spec.txt` → `status: done`, sim `checks=3 failed=0`, synth 210 cells, report written, zero retries (`evidence/W3-05-alu.txt`) |
+| W3-06 | OpenSTA image builds and runs on arm64 and amd64 | [x] | `docker run --rm siliconboard/sta:1.0 sta -version` → OpenSTA 3.1.0 exit 0; built from source with CUDD stage (`docker/sta/Dockerfile`) |
+| W3-07 | sky130 Liberty downloaded and cached | [x] | `pdk/sky130hd_tt_025C_1v80.lib` — 12,800,135 bytes, `library ("sky130_fd_sc_hd__tt_025C_1v80")` (`evidence/W3-07-liberty.txt`) |
+| W3-08 | Timing Agent: verdict from the parser, LLM only explains | [x] live on Groq | `main.py run --spec examples/counter/spec.txt --run-id w3-timing2` → `timing: slack=3.11 ns target=200.0 MHz MET via OpenSTA`, `verified: true`, report 103 words, `exit=0` (`evidence/W3-08-timing-done.txt`); offline proof the model's opposite verdict is overwritten: `tests/check_agents.py` |
+| W3-09 | Red team: fabricated quote, invented cell count, unearned testbench blame all rejected | [x] | `python tests/redteam.py` → 3 rejection classes + real evidence accepted (`evidence/W3-09-redteam.txt`) |
+| W3-10 | Ponytail debt ledger, no `no-trigger` markers | [x] | `grep -rnE '# ponytail:' .` → single cache ceiling marker with trigger, zero `no-trigger` (`evidence/W3-10-ponytail.txt`) |
 
 ## Week 4 — deploy, rehearse, stretch
 
