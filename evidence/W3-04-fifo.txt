@@ -1,0 +1,19 @@
+$ .venv/bin/python main.py run --spec examples/fifo/spec.txt --run-id w3-fifo
+module  fifo8x8, 8 ports
+rtl     v1, 49 lines
+synth   189 cells
+report  /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w3-fifo/report.md
+event   09:32:15 [drafting_spec] spec: fifo8x8, 8 ports, target 150.0 MHz
+event   09:32:20 [generating_rtl] rtl v1: fifo8x8 via groq:openai/gpt-oss-120b
+event   09:32:22 [linting] lint: clean, 0 warnings
+event   09:32:29 [writing_testbench] testbench: tb_fifo8x8, 135 lines
+event   09:32:32 [simulating] sim: checks=17 failed=0 verdict=True
+event   09:32:32 [synthesizing] synth: 189 cells
+event   09:32:34 [done] report: 109 words
+llm     spec groq:openai/gpt-oss-20b slot=1 in=763 out=969 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=943 out=1718 cached=False
+llm     testbench groq:openai/gpt-oss-20b slot=3 in=1451 out=4676 cached=False
+llm     report groq:openai/gpt-oss-20b slot=4 in=1274 out=1187 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w3-fifo/board.json
+exit=0
