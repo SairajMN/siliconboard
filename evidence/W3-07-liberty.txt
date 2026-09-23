@@ -1,0 +1,3 @@
+fetching https://raw.githubusercontent.com/The-OpenROAD-Project/OpenROAD-flow-scripts/master/flow/platforms/sky130hd/lib/sky130_fd_sc_hd__tt_025C_1v80.lib
+saved  /Users/sahil/Desktop/HACKATHON/siliconboard/pdk/sky130hd_tt_025C_1v80.lib (12800135 bytes)
+head   library ("sky130_fd_sc_hd__tt_025C_1v80") {
