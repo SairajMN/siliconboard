@@ -22,6 +22,10 @@ class LintAgent(BaseAgent):
         board.lint = LintResult(clean=clean, issues=issues, raw_log=log)
         if not clean:
             board.log(f"lint: {len(issues)} errors")
+            if not issues:
+                # the exit code came from docker or a crash, not verilator: say what actually happened
+                first = next((ln.strip() for ln in log.splitlines() if ln.strip()), "no output at all")
+                return AgentResult(ok=False, err=f"lint tool failed before any error line: {first}", log=log)
             return AgentResult(ok=False, err=f"{len(issues)} lint errors", log=log)
         board.log(f"lint: clean, {len(issues)} warnings")
         return AgentResult(ok=True, log=log, note=f"{len(issues)} warnings")

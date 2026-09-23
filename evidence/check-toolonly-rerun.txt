@@ -1,0 +1,4 @@
+\$ .venv/bin/python tests/check_toolonly.py  # docker restarted after daemon-down failure
+$ .venv/bin/python tests/check_toolonly.py
+tool-only agents: lint/sim/synth verified on real docker tools, ambiguity refused, no LLM refs
+exit=0

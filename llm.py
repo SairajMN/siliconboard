@@ -47,12 +47,13 @@ LIGHT = [
 OPENAI_COMPAT_BASE = {"groq": "https://api.groq.com/openai/v1", "nvidia": "https://integrate.api.nvidia.com/v1"}
 
 MAX_OUTPUT_TOKENS = 8192
-# free tiers meter output tokens per minute, and the limits differ per provider and
-# model: groq rejected an 8192 ask with "Limit 1000, Requested 1116", so start low
-# and let the measured limit lower it further
-PROVIDER_MAX_TOKENS = {"groq": 2048, "nvidia": 4096}
+# measured, not guessed: gpt-oss-20b needed 7069 completion tokens for one testbench and
+# accepts an 8192 ask; qwen's own ceiling arrives as a "Limit N" 429 and is adopted per
+# model by _lower_cap (probing wrongly at 2048/4096 truncated the JSON and cost hours)
+PROVIDER_MAX_TOKENS = {"groq": 8192, "nvidia": 4096}
 _cap: dict[str, int] = {}
 MAX_ATTEMPTS = 6
+REQUEST_TIMEOUT = 30  # seconds: a stalled provider must fail fast, never hang the pipeline
 COOLDOWN_S = 60.0
 
 # the SDK warns on every generate_content call; our logs are the audit trail
@@ -123,7 +124,8 @@ def _take_key(provider: str) -> tuple[int, str]:
 def _client_for(key: str) -> genai.Client:
     global _client, _client_key
     if _client is None or _client_key != key:
-        _client = genai.Client(api_key=key)
+        # without this a stalled Google connection hangs the whole pipeline forever
+        _client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT * 1000))
         _client_key = key
     return _client
 
@@ -182,16 +184,21 @@ def _next_provider(models: list[str], model_idx: int) -> int:
     return i
 
 
-def _lower_cap(provider: str, message: str) -> bool:
-    """A 'request too large' 429 names the real ceiling: adopt it and retry the same route."""
+def _lower_cap(provider: str, model: str, message: str) -> bool:
+    """A 'request too large' 429 names the real ceiling: adopt it and retry the same route.
+
+    Keyed per model: groq's limits are model-specific (qwen asked for 936 while
+    gpt-oss-20b happily takes 8192), so one model's ceiling must not poison another's.
+    """
     m = re.search(r"[Ll]imit (\d+)", message)
     if m is None:
         return False
     limit = int(m.group(1))
-    current = _cap.get(provider) or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS
+    key = f"{provider}:{model}"
+    current = _cap.get(key) or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS
     if limit - 64 >= current:
         return False
-    _cap[provider] = max(512, limit - 64)
+    _cap[key] = max(512, limit - 64)
     return True
 
 
@@ -207,10 +214,6 @@ def routes(models: list[str]) -> list[str]:
     return usable or models
 
 
-def dead_providers() -> list[str]:
-    return sorted(_dead)
-
-
 def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
                  schema: type[BaseModel], temperature: float) -> tuple[str, int | None, int | None]:
     body = {
@@ -223,7 +226,7 @@ def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
             {"role": "user", "content": prompt},
         ],
         "temperature": temperature,
-        "max_tokens": _cap.get(provider) or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS,
+        "max_tokens": _cap.get(f"{provider}:{model}") or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS,
         "response_format": {"type": "json_object"},
     }
     req = urllib.request.Request(
@@ -233,11 +236,18 @@ def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "siliconboard/0.1"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=180, context=_SSL_CONTEXT) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT, context=_SSL_CONTEXT) as resp:
             data = json.load(resp)
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="replace")[:300]
-        raise LLMError(f"{provider} http {exc.code}: {detail}") from exc
+        raw = exc.read().decode(errors="replace")
+        # groq puts the model's invalid output in failed_generation: show it first, the trace truncates
+        try:
+            bad = json.loads(raw).get("error", {}).get("failed_generation")
+        except (ValueError, AttributeError):
+            bad = None
+        if bad:
+            raise LLMError(f"{provider} http {exc.code}, invalid model output: {bad[:400]}") from exc
+        raise LLMError(f"{provider} http {exc.code}: {raw[:300]}") from exc
     usage = data.get("usage") or {}
     return data["choices"][0]["message"]["content"], usage.get("prompt_tokens"), usage.get("completion_tokens")
 
@@ -373,8 +383,8 @@ def call(
                 prompt += "\n\nYour previous response was not valid JSON. Return ONLY the JSON object, no fences, no prose."
                 continue
             if "request too large" in low or ("reduce max_tokens" in low):
-                if _lower_cap(provider, message):
-                    _trace(f"{provider} output cap lowered to {_cap[provider]}, retrying {model}")
+                if _lower_cap(provider, model, message):
+                    _trace(f"{provider}:{model} output cap lowered to {_cap[f'{provider}:{model}']}, retrying")
                     continue
             if "429" in message or "rate limit" in low or "too many requests" in low:
                 _cooling[(provider, slot)] = time.time() + COOLDOWN_S
@@ -427,6 +437,17 @@ def call(
                 continue
             if ("404" in message or "not_found" in low or "no longer available" in low or "410" in message) and model_idx < len(models) - 1:
                 model_idx = _skip_or_replace(provider, model, key, models, model_idx)
+                continue
+            if "timed out" in low or "timeout" in low:
+                # one stalled provider per run is enough: mark it dead, let the rest of the chain carry
+                _dead.add(provider)
+                _trace(f"{provider} timed out, skipping it for this run")
+                model_idx = _next_provider(models, model_idx)
+                if model_idx >= len(models):
+                    raise LLMError(
+                        f"{role}: chain exhausted, last error: {message[:300]}\n  attempts: "
+                        + " | ".join(TRACE[-6:])
+                    ) from exc
                 continue
             time.sleep(min(2.0 * attempt, 10.0))
             continue

@@ -1,4 +1,4 @@
-\$ .venv/bin/python tests/run_all.py
+\$ .venv/bin/python tests/run_all.py  # after ponytail-audit #1: deleted dead_providers() from llm.py
 board: round trip and status helpers pass
 parsers: all checks pass
 llm: 6 output schemas convert cleanly, gate repair loop re-prompts
@@ -7,3 +7,6 @@ redteam: invented numbers rejected, backed numbers accepted, failing checks pars
 
 5 check files passed
 exit=0
+
+\$ grep -rn dead_providers --include=*.py . | grep -v .venv  # confirms deletion has no dangling refs
+grep-exit=1 (1 = no refs, expected)
