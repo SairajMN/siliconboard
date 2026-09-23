@@ -1,0 +1,6 @@
+$ grep -rnE "# ponytail:" --include="*.py" . | grep -v no-trigger
+./tools.py:203:    # ponytail: regex port scan, swap for a real parser if non-ANSI style shows up
+./tests/check_llm.py:13:from google.genai import _transformers as transformers  # ponytail: private hook as canary, drop if the import breaks
+
+$ grep -rn "no-trigger" --include="*.py" .
+(none)
