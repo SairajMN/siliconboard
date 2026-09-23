@@ -38,6 +38,9 @@ def main() -> None:
     assert slack_from_sta("worst slack max   -0.350") == -0.35
     assert slack_from_sta("worst slack 1.2") == 1.2
     assert slack_from_sta("no timing here") is None
+    # captured from siliconboard/sta:1.0 report_checks output
+    assert slack_from_sta("       3.74   slack (MET)") == 3.74
+    assert slack_from_sta("      -0.350   slack (VIOLATED)") == -0.35
 
     noisy = [f"line {i} ok" for i in range(200)]
     noisy[120] = "CHECK mid FAIL got=1 want=2"

@@ -19,6 +19,7 @@ Rules:
 - Keep the port list identical to the spec: same names, same directions, same widths.
 - Parameterise widths where the spec allows it.
 - If a bug report is provided: fix exactly the described bug with the smallest change. Do not rewrite unrelated logic. Keep the port list identical to the previous attempt.
+- If a timing report says the target was missed: shorten the critical path (pipeline stages, break long combinational chains) while keeping the port list identical and every specified behaviour.
 
 {NO_INVENTION}"""
 

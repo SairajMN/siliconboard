@@ -14,6 +14,7 @@ from agents.rtl import RTLAgent
 from agents.simrunner import SimRunnerAgent
 from agents.spec import SpecAgent
 from agents.synth import SynthesisAgent
+from agents.timing import TimingAgent
 from agents.testbench import TestbenchAgent
 from agent import AgentResult, BaseAgent
 from board import Board, DesignStatus
@@ -27,6 +28,7 @@ AGENTS: dict[DesignStatus, BaseAgent] = {
     DesignStatus.SIMULATING: SimRunnerAgent(),
     DesignStatus.DEBUGGING: DebugAgent(),
     DesignStatus.SYNTHESIZING: SynthesisAgent(),
+    DesignStatus.ANALYZING_TIMING: TimingAgent(),
 }
 
 NEXT = {
@@ -36,7 +38,8 @@ NEXT = {
     "testbench_agent": DesignStatus.SIMULATING,
     "sim_runner_agent": DesignStatus.SYNTHESIZING,
     "debug_agent": DesignStatus.GENERATING_RTL,
-    "synthesis_agent": DesignStatus.DONE,
+    "synthesis_agent": DesignStatus.ANALYZING_TIMING,
+    "timing_agent": DesignStatus.DONE,
 }
 
 STOP = {
@@ -47,6 +50,7 @@ STOP = {
     "sim": "sim_runner_agent",
     "debug": "debug_agent",
     "synth": "synthesis_agent",
+    "timing": "timing_agent",
 }
 
 # None = no earlier stage can fix it (the model already re-prompted itself internally)
@@ -54,13 +58,15 @@ BACKWARD: dict[str, DesignStatus | None] = {
     "spec_agent": None,
     "rtl_agent": None,
     "lint_agent": DesignStatus.GENERATING_RTL,
-    "testbench_agent": None,
+    # a TB failure is fixed by another testbench attempt (fresh chain pass), not by older state
+    "testbench_agent": DesignStatus.WRITING_TESTBENCH,
     "sim_runner_agent": DesignStatus.DEBUGGING,
     "debug_agent": None,
     "synthesis_agent": DesignStatus.GENERATING_RTL,
+    "timing_agent": DesignStatus.GENERATING_RTL,
 }
 
-MAX_BACKWARD = {"lint_agent": 3, "sim_runner_agent": 3, "synthesis_agent": 2}
+MAX_BACKWARD = {"lint_agent": 3, "testbench_agent": 2, "sim_runner_agent": 3, "synthesis_agent": 2, "timing_agent": 2}
 
 
 class Orchestrator:
@@ -76,6 +82,13 @@ class Orchestrator:
         if result.ok:
             if self.inject and agent.name == "rtl_agent" and self.board.latest_rtl is not None:
                 self._inject()
+            if agent.name == "debug_agent" and self.board.latest_bug is not None:
+                blamed = self.board.latest_bug.blames
+                if blamed == "testbench":
+                    self.board.status = DesignStatus.WRITING_TESTBENCH
+                    self.board.log("debug blames the testbench, back to writing_testbench")
+                    self.board.save(self.run_dir)
+                    return agent, result
             self.board.status = NEXT[agent.name]
         else:
             self._route(agent, result)
@@ -88,8 +101,13 @@ class Orchestrator:
         target = BACKWARD.get(agent.name)
         cap = MAX_BACKWARD.get(agent.name, 1)
         if target is None or attempts > cap:
-            self.board.status = DesignStatus.FAILED
-            self.board.log(f"{agent.name}: failed {attempts}x, giving up: {result.err}")
+            # a timing miss ships flagged instead of failing: functionally correct beats on-time
+            if agent.name == "timing_agent":
+                self.board.status = DesignStatus.DONE_WITH_WARNING
+                self.board.log(f"{agent.name}: failed {attempts}x, shipping with warning: {result.err}")
+            else:
+                self.board.status = DesignStatus.FAILED
+                self.board.log(f"{agent.name}: failed {attempts}x, giving up: {result.err}")
             return
         self.board.status = target
         self.board.log(f"{agent.name}: failed ({attempts}/{cap}), back to {target.value}: {result.err}")

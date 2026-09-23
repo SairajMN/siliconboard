@@ -53,7 +53,9 @@ MAX_OUTPUT_TOKENS = 8192
 PROVIDER_MAX_TOKENS = {"groq": 8192, "nvidia": 4096}
 _cap: dict[str, int] = {}
 MAX_ATTEMPTS = 6
-REQUEST_TIMEOUT = 30  # seconds: a stalled provider must fail fast, never hang the pipeline
+# nvidia's slowest completion ran past 90s; 150s is the ceiling for one stalled wait,
+# because the timeout handler marks it dead for the run and the chain moves on (F12/F13)
+REQUEST_TIMEOUT = 150
 COOLDOWN_S = 60.0
 
 # the SDK warns on every generate_content call; our logs are the audit trail
