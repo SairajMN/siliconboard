@@ -1,0 +1,19 @@
+$ .venv/bin/python main.py run --spec examples/alu/spec.txt --run-id w3-alu
+module  alu8, 5 ports
+rtl     v1, 25 lines
+synth   210 cells
+report  /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w3-alu/report.md
+event   09:40:35 [drafting_spec] spec: alu8, 5 ports, target 100.0 MHz
+event   09:40:38 [generating_rtl] rtl v1: alu8 via groq:openai/gpt-oss-120b
+event   09:40:38 [linting] lint: clean, 0 warnings
+event   09:40:50 [writing_testbench] testbench: tb_alu8, 67 lines
+event   09:40:52 [simulating] sim: checks=3 failed=0 verdict=True
+event   09:40:53 [synthesizing] synth: 210 cells
+event   09:40:57 [done] report: 61 words
+llm     spec groq:openai/gpt-oss-20b slot=1 in=772 out=678 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=809 out=756 cached=False
+llm     testbench groq:openai/gpt-oss-20b slot=4 in=1402 out=5039 cached=False
+llm     report groq:openai/gpt-oss-20b slot=1 in=1143 out=2378 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w3-alu/board.json
+exit=0
