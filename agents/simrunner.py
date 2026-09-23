@@ -23,13 +23,15 @@ class SimRunnerAgent(BaseAgent):
         rc, log = simulate(work, rtl.filename, tb.filename, tb_top)
 
         if rc != 0:
-            board.sim_history.append(SimResult(passed=None, raw_log=log, ambiguity="compile_failed"))
+            board.sim_history.append(
+                SimResult(passed=None, raw_log=log, ambiguity="compile_failed", rtl_version=rtl.version)
+            )
             board.log("sim: compile failed")
             return AgentResult(ok=False, err="compile_failed", log=log)
 
         passed = verdict(log)
         total, failed = check_counts(log)
-        result = SimResult(passed=passed, total_checks=total, failed_checks=failed, raw_log=log)
+        result = SimResult(passed=passed, total_checks=total, failed_checks=failed, raw_log=log, rtl_version=rtl.version)
         if passed is None:
             result.ambiguity = "log has no single terminal PASS/FAIL line"
         board.sim_history.append(result)

@@ -30,7 +30,7 @@ from board import (
     SynthesisReport,
     TestbenchArtifact,
 )
-from tools import check_results, unbacked_numbers
+from tools import check_results, fail_lines, unbacked_numbers
 
 RTL_SRC = (ROOT / "smoke" / "counter.v").read_text()
 TB_SRC = (ROOT / "smoke" / "tb_counter.v").read_text()
@@ -68,6 +68,10 @@ def the_number_gate_only_knows_board_numbers() -> None:
 
 def check_names_are_parsed_not_guessed() -> None:
     assert check_results(SIM_LOG) == {"reset": True, "count_three": False}
+    # FAIL lines in real testbenches end with got=/want= — the parser must not drop them
+    verbose = "CHECK hold_1 FAIL got=4 want=3\nCHECK inc_1 PASS\nSUMMARY checks=2 failed=1\nFAIL\n"
+    assert check_results(verbose) == {"hold_1": False, "inc_1": True}, check_results(verbose)
+    assert fail_lines(verbose) == [("hold_1", "4", "3")], fail_lines(verbose)
 
 
 class _FakeReport:
@@ -185,6 +189,45 @@ def debug_agent_accepts_a_real_quote(root: Path) -> None:
     assert len(board.bug_history) == 1, "a cited, verifiable bug report lands on the Board"
 
 
+def debug_gate_only_earns_a_testbench_blame_from_cross_version_evidence(root: Path) -> None:
+    # one attempt only: blaming the testbench is not yet earned
+    lone = BugReport(
+        summary="expectations look wrong",
+        likely_cause="stimulus changes a negedge late",
+        failing_check="count_three",
+        suggested_fix="sample one edge later in the testbench",
+        evidence_quote="CHECK count_three FAIL",
+        blames="testbench",
+    )
+    result, board, fake = run_debug_agent(lone, root / "blame-lone")
+    assert not result.ok, "a testbench blame without cross-version evidence must be rejected"
+    assert "two simulation attempts" in (result.err or ""), result.err
+    assert fake.calls > 1, "the gate must re-prompt instead of accepting the first answer"
+    assert board.bug_history == []
+
+    # the same check failed identically under two rtl versions: the blame is earned
+    evidenced = "CHECK reset PASS\nCHECK count_three FAIL got=99 want=3\nSUMMARY checks=2 failed=1\nFAIL\n"
+    board2 = FACT_BOARD.model_copy(deep=True)
+    board2.sim_history = [
+        SimResult(passed=False, raw_log=evidenced, rtl_version=1),
+        SimResult(passed=False, raw_log=evidenced, rtl_version=2),
+    ]
+    import llm as _llm
+    from agents.debug import DebugAgent as _Debug
+
+    _llm._rings.clear()
+    _llm._cooling.clear()
+    fake2 = _FakeBug(lone)
+    original = _llm._openai_call
+    _llm._openai_call = fake2
+    try:
+        result2 = _Debug().run(board2)
+    finally:
+        _llm._openai_call = original
+    assert result2.ok, result2.err
+    assert board2.bug_history[-1].blames == "testbench"
+
+
 def main() -> None:
     os.environ.setdefault("GROQ_API_KEY_1", "g1000000000000000000")
     the_number_gate_only_knows_board_numbers()
@@ -196,9 +239,10 @@ def main() -> None:
         report_agent_accepts_backed_numbers(root)
         debug_agent_refuses_a_fabricated_quote(root)
         debug_agent_accepts_a_real_quote(root)
+        debug_gate_only_earns_a_testbench_blame_from_cross_version_evidence(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
-    print("redteam: invented numbers and fabricated quotes rejected, real evidence accepted")
+    print("redteam: invented numbers, fabricated quotes, and unearned testbench blames rejected")
 
 
 if __name__ == "__main__":

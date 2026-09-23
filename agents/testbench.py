@@ -18,7 +18,8 @@ Rules:
 - Generate a clock (10 ns period) and drive the reset as the spec describes.
 - Give every reg you drive an explicit value at time 0, before the first clock edge. An input left at X makes every check on it meaningless.
 - Release the reset before the first check that expects a non-zero result, not later in the file. A design still in reset reads its reset value and every such check fails even when the RTL is correct.
-- Declare any string passed to a task wide enough for the longest name you pass, for example `input [8*24-1:0] name;`. A narrow port truncates the name silently and the log can no longer say which check failed.
+- Declare any string passed to a task wide enough for the longest name you pass: for a 24-character longest name that is `input [8*24-1:0] name;` (8 bits per character). The harness rejects any name longer than the declared width.
+- Keep every check name at most 32 characters: `sub_wrap`, never `subtraction_wraps_from_0x80_to_0x7f`. If a name would be longer, shorten the name — do not widen the port instead.
 - Never change stimulus on a clock edge. Change inputs on the negedge of the clock (or `#1` after a posedge), otherwise the testbench races the DUT and failures are fake.
 - Sample the DUT output only after the clock edge that should have produced it: wait for the next negedge, then compare. A check that runs inside `always @(posedge clk)` reads the value from before the edge and will report a false failure.
 - Keep all checking in one `initial` block. Declare `integer checks = 0; integer failed = 0;` and update them with blocking assignments only (`failed = failed + 1;`). A `<=` update on a scoreboard counter races that block and reports the wrong summary.
@@ -141,12 +142,21 @@ class TestbenchAgent(BaseAgent):
         dut = rtl.module_name
 
         # the testbench sees the spec and the port map, never the RTL body
-        prompt = build_prompt(
-            ("specification", board.spec.model_dump_json(indent=2)),
-            ("dut port map", str({p.name: (p.direction, p.width) for p in board.spec.io_ports})),
-            ("dut module name", dut),
-            ("task", "Write the complete self-checking testbench now, as JSON matching the schema."),
-        )
+        sections = [("specification", board.spec.model_dump_json(indent=2))]
+        if board.latest_bug is not None and board.latest_bug.blames == "testbench":
+            sections.append(
+                (
+                    "the previous testbench was rejected",
+                    board.latest_bug.model_dump_json(indent=2)
+                    + "\nWrite a different testbench: recheck the expected value and the edge you apply each "
+                    "stimulus change on. Changing an input on a negedge means the next posedge still sees the "
+                    "OLD value — derive want= from the value the DUT holds at the sampling edge.",
+                )
+            )
+        sections.append(("dut port map", str({p.name: (p.direction, p.width) for p in board.spec.io_ports})))
+        sections.append(("dut module name", dut))
+        sections.append(("task", "Write the complete self-checking testbench now, as JSON matching the schema."))
+        prompt = build_prompt(*sections)
 
         def gate(artifact: TestbenchArtifact) -> list[str]:
             problems = tb_problems(artifact, dut, board.spec)

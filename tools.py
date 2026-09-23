@@ -12,12 +12,12 @@ from board import DesignSpec, RTLArtifact, TestbenchArtifact
 IMAGE = "siliconboard/eda:1.0"
 
 
-def run_eda(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, str]:
+def run_eda(cmd: list[str], cwd: Path, timeout: int = 300, image: str = IMAGE) -> tuple[int, str]:
     full = [
         "docker", "run", "--rm",
         "-v", f"{Path(cwd).resolve()}:/work",
         "-w", "/work",
-        IMAGE,
+        image,
         *cmd,
     ]
     try:
@@ -64,17 +64,27 @@ def cells_from_stat(log: str) -> int | None:
 
 
 def slack_from_sta(log: str) -> float | None:
-    m = re.search(r"worst slack\s+(?:max|min)?\s*(-?\d+\.?\d*)", log)
+    # OpenSTA's report_checks prints "   3.74   slack (MET)"; older scripts print "worst slack"
+    m = re.search(r"(-?\d+\.?\d*)\s+slack \((?:MET|VIOLATED)\)", log)
+    if m is None:
+        m = re.search(r"worst slack\s+(?:max|min)?\s*(-?\d+\.?\d*)", log)
     return float(m.group(1)) if m else None
 
 
-_CHECK_LINE = re.compile(r"^CHECK\s+(\S+)\s+(PASS|FAIL)\s*$", re.M)
+# FAIL lines carry the got/want values the TB rules mandate; PASS lines are bare
+_CHECK_LINE = re.compile(r"^CHECK\s+(\S+)\s+(PASS|FAIL)(?:\s+got=\S+\s+want=\S+)?\s*$", re.M)
+_FAIL_LINE = re.compile(r"^CHECK\s+(\S+)\s+FAIL\s+got=(\S+)\s+want=(\S+)", re.M)
 _NUMBER = re.compile(r"\d+(?:\.\d+)?")
 _STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.+Z-]+|\b\d{2}:\d{2}:\d{2}\b")
 
 
 def check_results(log: str) -> dict[str, bool]:
-    return {name: word == "PASS" for name, word in _CHECK_LINE.findall(log)}
+    return {name: word == "PASS" for name, word, *_ in _CHECK_LINE.findall(log)}
+
+
+def fail_lines(log: str) -> list[tuple[str, str, str]]:
+    """(check, got, want) for every failing check that printed evidence values."""
+    return _FAIL_LINE.findall(log)
 
 
 def unbacked_numbers(text: str, facts: str) -> list[str]:

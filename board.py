@@ -66,6 +66,7 @@ class SimResult(BaseModel):
     failed_checks: int | None = None
     raw_log: str = ""
     ambiguity: str | None = None
+    rtl_version: int | None = None
 
 
 class BugReport(BaseModel):
@@ -74,6 +75,7 @@ class BugReport(BaseModel):
     failing_check: str
     suggested_fix: str
     evidence_quote: str
+    blames: Literal["rtl", "testbench"] = "rtl"
     notes: str = ""
 
 
