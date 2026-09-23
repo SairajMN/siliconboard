@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -11,7 +13,7 @@ import llm
 from agents.rtl import RTLAgent, rtl_problems
 from agents.spec import SpecAgent
 from agents.testbench import TestbenchAgent, tb_problems
-from board import Board, DesignSpec, Port, RTLArtifact, TestbenchArtifact
+from board import Board, DesignSpec, Port, RTLArtifact, SynthesisReport, TestbenchArtifact
 
 ROOT = Path(__file__).resolve().parent.parent
 RTL_SRC = (ROOT / "smoke" / "counter.v").read_text()
@@ -179,6 +181,45 @@ def tb_gate_catches_a_racy_testbench() -> None:
     assert any("always @(posedge clk)" in p for p in problems), problems
 
 
+def timing_agent_forces_the_verdict_from_a_fake_sta_log() -> None:
+    import agents.timing as tim
+
+    def fake_eda(cmd, cwd, timeout=300, image=None):
+        if cmd[0] == "yosys":
+            (Path(cwd) / "netlist.v").write_text("module counter; endmodule\n")
+            return 0, "mapped"
+        return 0, "Startpoint: a\nEndpoint: b\n   3.74   slack (MET)\n"
+
+    class Narration(FakeLLM):
+        # the model guesses the OPPOSITE verdict; the harness must keep the tool's
+        def __call__(self, *args, **kwargs):
+            self.gate = kwargs.get("validate")
+            return tim.TimingReport(met_target=False, worst_slack_ns=-9.9, critical_path="a to b", explanation="3.74 ns")
+
+    board = Board(request="counter", spec=COUNTER_SPEC.model_copy(update={"target_freq_mhz": 200.0}))
+    board.rtl_history = [RTLArtifact(module_name="counter", filename="counter.v", source_code=RTL_SRC, version=1)]
+    board.synthesis_report = SynthesisReport(cell_count=24)
+    fake = Narration(None)
+
+    original_eda, original_call = tim.run_eda, llm.call
+    tim.run_eda, llm.call = fake_eda, fake
+    tmp = Path(tempfile.mkdtemp(prefix="sbtiming-"))
+    try:
+        agent = tim.TimingAgent()
+        agent.run_dir = tmp
+        result = agent.run(board)
+    finally:
+        tim.run_eda, llm.call = original_eda, original_call
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    assert result.ok, result.err
+    report = board.timing_report
+    assert report.met_target is True, "the model's False guess was NOT overwritten by the tool verdict"
+    assert report.worst_slack_ns == 3.74, "slack must come from the parse, not the model's -9.9"
+    assert report.verified is True
+    assert report.critical_path == "a to b", "narration is kept, verdict fields are forced"
+
+
 def main() -> None:
     spec_agent_refuses_empty()
     rtl_gate_flags_wrong_module_and_flat_files()
@@ -187,7 +228,8 @@ def main() -> None:
     tb_gate_catches_every_bad_shape()
     tb_gate_catches_a_racy_testbench()
     tb_agent_names_its_own_file_and_gates_it()
-    print("agents: spec/rtl/testbench gates verified offline (llm faked, no network)")
+    timing_agent_forces_the_verdict_from_a_fake_sta_log()
+    print("agents: spec/rtl/testbench/timing gates verified offline (llm faked, no docker)")
 
 
 if __name__ == "__main__":

@@ -84,12 +84,79 @@ def lint_failures_cap_at_three() -> None:
     shutil.rmtree(tmp)
 
 
+def testbench_failures_retry_the_stage_before_giving_up() -> None:
+    board, tmp, table = run_with(stubs(testbench_agent=99))
+    assert board.status == DesignStatus.FAILED, board.status
+    assert board.stage_retries["testbench_agent"] == 3, "2 stage retries allowed, the 3rd must give up"
+    assert calls(table, "rtl_agent") == 1, "an unusable testbench must not burn RTL rewrites"
+    assert "back to writing_testbench" in "\n".join(board.event_log)
+    shutil.rmtree(tmp)
+
+
+def testbench_recovers_on_second_stage_pass() -> None:
+    board, tmp, table = run_with(stubs(testbench_agent=1))
+    assert board.status == DesignStatus.DONE, board.status
+    assert board.stage_retries == {"testbench_agent": 1}
+    assert calls(table, "rtl_agent") == 1, "rtl is untouched by a testbench retry"
+    shutil.rmtree(tmp)
+
+
+def a_timing_miss_reworks_then_ships_with_warning() -> None:
+    board, tmp, table = run_with(stubs(timing_agent=99))
+    assert board.status == DesignStatus.DONE_WITH_WARNING, board.status
+    assert board.stage_retries["timing_agent"] == 3, "2 reworks allowed, the 3rd miss ships flagged"
+    assert calls(table, "rtl_agent") == 3, "initial write plus two timing-driven reworks"
+    assert any("shipping with warning" in line for line in board.event_log)
+    shutil.rmtree(tmp)
+
+
+def timing_recovers_after_one_rework() -> None:
+    board, tmp, table = run_with(stubs(timing_agent=1))
+    assert board.status == DesignStatus.DONE, board.status
+    assert board.stage_retries == {"timing_agent": 1}
+    assert calls(table, "rtl_agent") == 2, "one rework, then the timing stage passed"
+    shutil.rmtree(tmp)
+
+
+def a_testbench_blame_reroutes_to_writing_the_testbench() -> None:
+    from board import BugReport
+
+    class BlameTB(Stub):
+        def run(self, board):
+            self.calls += 1
+            board.bug_history.append(
+                BugReport(
+                    summary="hold expectation is off by one",
+                    likely_cause="stimulus changes enable a negedge late",
+                    failing_check="hold_1",
+                    suggested_fix="sample after the edge that consumes the new enable value",
+                    evidence_quote="CHECK hold_1 FAIL got=4 want=3",
+                    blames="testbench",
+                )
+            )
+            return AgentResult(ok=True)
+
+    table = stubs(sim_runner_agent=1)
+    table[DesignStatus.DEBUGGING] = BlameTB("debug_agent", 0)
+    board, tmp, _ = run_with(table)
+    assert board.status == DesignStatus.DONE, board.status
+    assert "back to writing_testbench" in "\n".join(board.event_log)
+    assert calls(table, "testbench_agent") == 2, "the testbench must be rewritten after a testbench blame"
+    assert calls(table, "rtl_agent") == 1, "a testbench blame must not regenerate the RTL"
+    shutil.rmtree(tmp)
+
+
 def main() -> None:
     forward_pass_reaches_done()
     a_sim_failure_routes_through_debug_and_back()
     exhausted_retries_fail_the_run()
     lint_failures_cap_at_three()
-    print("routing: forward, backward via debug, per-stage caps verified (stubbed agents)")
+    testbench_failures_retry_the_stage_before_giving_up()
+    testbench_recovers_on_second_stage_pass()
+    a_timing_miss_reworks_then_ships_with_warning()
+    timing_recovers_after_one_rework()
+    a_testbench_blame_reroutes_to_writing_the_testbench()
+    print("routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework verified")
 
 
 if __name__ == "__main__":
