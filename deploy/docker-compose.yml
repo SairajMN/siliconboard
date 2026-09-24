@@ -1,0 +1,9 @@
+services:
+  eda:
+    image: siliconboard/eda:1.0
+    platform: linux/amd64
+    volumes:
+      - ../runs:/workspace/runs
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
