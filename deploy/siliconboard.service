@@ -1,0 +1,21 @@
+[Unit]
+Description=SiliconBoard Multi-Agent Chip Design System
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/siliconboard
+EnvironmentFile=/etc/siliconboard/env
+ExecStart=/opt/siliconboard/.venv/bin/python main.py doctor
+Restart=on-failure
+RestartSec=5s
+
+# Security sandboxing
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
