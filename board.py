@@ -67,6 +67,11 @@ class SimResult(BaseModel):
     raw_log: str = ""
     ambiguity: str | None = None
     rtl_version: int | None = None
+    # a second engine's verdict, when the cross-check ran; disagreement is a failure, not a footnote
+    cross_checked: bool = False
+    cross_agreed: bool | None = None
+    cross_log: str = ""
+    wave_file: str | None = None
 
 
 class BugReport(BaseModel):
