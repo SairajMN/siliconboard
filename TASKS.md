@@ -81,7 +81,7 @@ instead of retrying, so you can re-test with one command:
 | W4-05 | Dual-sim cross-check, Verilator and Icarus agree | [x] | `tests/check_toolonly.py` cross_sim_agrees, cross_sim_disagreement_fails_the_run |
 | W4-06 | Waveform dump for the demo | [x] | `tests/check_toolonly.py` waves_land_on_disk, evidence/W4-05-06-cross-sim-waves.txt |
 | W4-07 | Demo rehearsed 3 times, each ≤5:00, one offline | [x] | rehearsal 1 failed (provider outage + vacuous-reset hole, both root-caused and fixed), rehearsal 2 live inject run passed (v1 FAIL → cited bug → v3 PASS), rehearsal 3 offline replay: 0 LLM calls, byte-identical report; evidence/W4-07-rehearsal-2-inject-loop.txt, evidence/W4-07-rehearsal-3-offline-replay.txt |
-| W4-08 | Physical design (stretch) never blocks the run | [ ] | `main.py run … --with-pnr` |
+| W4-08 | Physical design (stretch) never blocks the run | [x] | cut on purpose: published openroad image has no binary, runtime image is not pullable; pipeline ends at timing; evidence/W4-08-pnr-cut.txt |
 | W4-09 | Ponytail audit #2, README final, checks green | [ ] | `python tests/run_all.py` |
 
 ## Findings — facts the tools taught us (each cost a real failure)
