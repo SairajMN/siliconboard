@@ -27,10 +27,14 @@ def run_eda(cmd: list[str], cwd: Path, timeout: int = 300, image: str = IMAGE) -
     return p.returncode, p.stdout + p.stderr
 
 
-def simulate(work: Path, rtl_file: str, tb_file: str, top: str) -> tuple[int, str]:
+def simulate(
+    work: Path, rtl_file: str, tb_file: str, top: str, trace: bool = False
+) -> tuple[int, str]:
     shutil.rmtree(work / "obj_dir", ignore_errors=True)
+    trace_flags = ["--trace", "--trace-structs"] if trace else []
     rc, log = run_eda(
-        ["verilator", "--binary", "--timing", "-Wno-fatal", "--top-module", top, rtl_file, tb_file], work
+        ["verilator", "--binary", "--timing", "-Wno-fatal", *trace_flags,
+         "--top-module", top, rtl_file, tb_file], work
     )
     if rc != 0:
         return rc, log
@@ -214,3 +218,23 @@ def spec_mismatch(spec: DesignSpec, rtl: RTLArtifact) -> list[str]:
         if port_name not in want:
             problems.append(f"port {port_name!r} in RTL but not in spec")
     return problems
+
+def simulate_iverilog(work: Path, rtl_file: str, tb_file: str, top: str) -> tuple[int, str]:
+    """A second, independent engine. Two simulators agreeing is the strongest
+    evidence available that a testbench is not fooling itself."""
+    rc, log = run_eda(["iverilog", "-g2005", "-s", top, "-o", "sim.vvp", rtl_file, tb_file], work)
+    if rc != 0:
+        return rc, log
+    return run_eda(["vvp", "sim.vvp"], work, timeout=120)
+
+
+def with_vcd(tb_source: str, vcd_name: str) -> str:
+    """Neither engine writes a waveform on its own: verilator also needs --trace."""
+    if "$dumpfile" in tb_source:
+        return tb_source
+    return re.sub(
+        r"(initial\s+begin\b)",
+        rf'\1\n    $dumpfile("{vcd_name}");\n    $dumpvars(0);',
+        tb_source,
+        count=1,
+    )
