@@ -1,0 +1,57 @@
+# W4-09 final audit: debt ledger, readme, live end-to-end verification
+
+$ .venv/bin/python tests/run_all.py
+parsers: all checks pass
+llm: 6 output schemas convert cleanly, gate repair loop re-prompts
+agents: spec/rtl/testbench/timing gates verified offline (llm faked, no docker)
+replayed r from board.json, 0 recorded llm calls, none made now
+status  done
+board   /var/folders/nx/kv4drx2n1s3_mwp7fnh_6z4m0000gn/T/tmpz_f9o6lz/runs/r/board.json
+no board.json in /var/folders/nx/kv4drx2n1s3_mwp7fnh_6z4m0000gn/T/tmpz_f9o6lz/runs/missing
+no stored report; this run never reached narration
+routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework, offline replay verified
+redteam: invented numbers, fabricated quotes, and unearned testbench blames rejected
+
+6 check files passed
+
+$ grep -rnE "(#|//) ?ponytail:" --include="*.py" .
+./tools.py:207:    # ponytail: regex port scan, swap for a real parser if non-ANSI style shows up
+./tests/check_llm.py:13:from google.genai import _transformers as transformers  # ponytail: private hook as canary, drop if the import breaks
+
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w4-final --waves --cross-sim
+# W4-09 final verification: live end-to-end run
+
+$ .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w4-final --waves --cross-sim
+module  up_counter, 4 ports
+rtl     v1, 16 lines
+synth   28 cells
+report  /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w4-final/report.md
+event   17:21:15 [drafting_spec] spec: up_counter, 4 ports, target 200.0 MHz
+event   17:21:17 [generating_rtl] rtl v1: up_counter via groq:openai/gpt-oss-120b
+event   17:21:17 [linting] lint: clean, 0 warnings
+event   17:21:32 [writing_testbench] testbench: tb_up_counter, 89 lines
+event   17:21:38 [simulating] sim: checks=6 failed=0 verdict=True
+event   17:21:38 [simulating] cross-check: icarus says True (verilator said True)
+event   17:21:38 [synthesizing] synth: 28 cells
+event   17:21:42 [analyzing_timing] timing: slack=3.34 ns target=200.0 MHz MET via OpenSTA
+event   17:21:44 [done] report: 144 words
+llm     spec groq:openai/gpt-oss-20b slot=1 in=738 out=598 cached=False
+llm     rtl groq:openai/gpt-oss-120b slot=2 in=835 out=624 cached=False
+llm     testbench groq:openai/gpt-oss-120b slot=4 in=1373 out=2323 cached=False
+llm     timing groq:openai/gpt-oss-20b slot=1 in=919 out=700 cached=False
+llm     report groq:openai/gpt-oss-20b slot=2 in=1401 out=1010 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w4-final/board.json
+exit=0
+elapsed=32s
+
+$ board facts (waves + cross-check)
+total 24
+drwxr-xr-x@ 3 sahil  staff    96 Sep 25 22:51 .
+drwxr-xr-x@ 8 sahil  staff   256 Sep 25 22:51 ..
+-rw-r--r--@ 1 sahil  staff  9976 Sep 25 22:51 dump.vcd
+status           done
+cross_checked    True | agreed True
+cell_count       28
+worst_slack_ns   3.34 | met True
+rtl versions     1
