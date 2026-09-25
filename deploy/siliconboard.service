@@ -4,13 +4,13 @@ After=network.target docker.service
 Requires=docker.service
 
 [Service]
-Type=simple
+Type=oneshot
+RemainAfterExit=yes
 User=root
 WorkingDirectory=/opt/siliconboard
 EnvironmentFile=/etc/siliconboard/env
+ExecStartPre=/opt/siliconboard/deploy/check_host.sh
 ExecStart=/opt/siliconboard/.venv/bin/python main.py doctor
-Restart=on-failure
-RestartSec=5s
 
 # Security sandboxing
 ProtectSystem=full
