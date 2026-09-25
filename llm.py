@@ -47,6 +47,7 @@ LIGHT = [
 OPENAI_COMPAT_BASE = {"groq": "https://api.groq.com/openai/v1", "nvidia": "https://integrate.api.nvidia.com/v1"}
 
 MAX_OUTPUT_TOKENS = 8192
+CALL_BUDGET_S = 240
 # measured, not guessed: gpt-oss-20b needed 7069 completion tokens for one testbench and
 # accepts an 8192 ask; qwen's own ceiling arrives as a "Limit N" 429 and is adopted per
 # model by _lower_cap (probing wrongly at 2048/4096 truncated the JSON and cost hours)
@@ -312,7 +313,12 @@ def call(
     model_idx = 0
     repairs = 0
     attempt = 0
+    deadline = time.time() + CALL_BUDGET_S
     while attempt < MAX_ATTEMPTS:
+        # a chain outage must not stall the pipeline: rehearsal-1 burned 4 minutes
+        # here because each dead route waited out its own read timeout first
+        if time.time() > deadline:
+            raise LLMError(f"{role}: chain still failing after {CALL_BUDGET_S}s, giving up on this stage. attempts: {' | '.join(TRACE[-6:])}")
         attempt += 1
         route = models[min(model_idx, len(models) - 1)]
         provider, _, model = route.partition(":")
