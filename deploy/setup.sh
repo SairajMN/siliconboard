@@ -50,11 +50,6 @@ ENVEOF
     echo "    add your keys, then: systemctl start siliconboard"
 fi
 
-if [ -d "${APP_DIR}/docker/eda" ]; then
-    echo "==> Building EDA docker image on host"
-    docker build -t siliconboard/eda:1.0 "${APP_DIR}/docker/eda"
-fi
-
 echo "==> venv + dependencies"
 python3 -m venv "${APP_DIR}/.venv"
 "${APP_DIR}/.venv/bin/pip" install -q --upgrade pip
@@ -64,7 +59,9 @@ echo "==> building the EDA image (verilator, yosys, iverilog)"
 docker build -q -t siliconboard/eda:1.0 "${APP_DIR}/docker/eda"
 
 echo "==> fetching the sky130 liberty for the timing stage"
-( cd "${APP_DIR}" && "${APP_DIR}/.venv/bin/python" pdk/fetch_liberty.py )
+# the timing stage is a bonus, so a failed fetch must not abort the whole bootstrap
+( cd "${APP_DIR}" && "${APP_DIR}/.venv/bin/python" pdk/fetch_liberty.py ) \
+    || echo "[!] liberty fetch failed; the timing stage will report an estimate"
 
 if [ "${SKIP_STA}" = "1" ]; then
     echo "==> SKIP_STA=1, not building OpenSTA; the timing stage will report an estimate"
