@@ -139,6 +139,69 @@ def tb_lint_gate() -> None:
     shutil.rmtree(tmp)
 
 
+def cross_sim_agrees() -> None:
+    # the second engine must reach the same verdict from the same testbench
+    board, tmp = fresh(Board(status="simulating", rtl_history=[GOOD_RTL], testbench=GOOD_TB))
+    SimRunnerAgent.cross_sim = True
+    try:
+        r = SimRunnerAgent().run(board)
+    finally:
+        SimRunnerAgent.cross_sim = False
+    assert r.ok, r.err
+    last = board.sim_history[-1]
+    assert last.cross_checked and last.cross_agreed is True, last
+    assert last.cross_log, "the second engine's raw log must be kept as evidence"
+
+
+def cross_sim_tracks_a_real_failure() -> None:
+    # both engines see the same FAIL, so the disagreement gate must not fire
+    board, tmp = fresh(Board(status="simulating", rtl_history=[SABOTAGED_RTL], testbench=GOOD_TB))
+    SimRunnerAgent.cross_sim = True
+    try:
+        r = SimRunnerAgent().run(board)
+    finally:
+        SimRunnerAgent.cross_sim = False
+    assert not r.ok
+    last = board.sim_history[-1]
+    assert last.cross_checked and last.cross_agreed is True, last
+    assert "FAIL" in r.err and "checks failed" in r.err, r.err
+    assert board.latest_sim.rtl_version == 2
+
+
+def cross_sim_disagreement_fails_the_run() -> None:
+    """A disagreement must not be papered over: neither engine is treated as the winner."""
+    board, _ = fresh(Board(status="simulating", rtl_history=[GOOD_RTL], testbench=GOOD_TB))
+    import agents.simrunner as simrunner
+
+    real = simrunner.simulate_iverilog
+    simrunner.simulate_iverilog = lambda *a, **k: (0, "CHECK c PASS\nFAIL\n")
+    SimRunnerAgent.cross_sim = True
+    try:
+        r = SimRunnerAgent().run(board)
+    finally:
+        SimRunnerAgent.cross_sim = False
+        simrunner.simulate_iverilog = real
+    assert not r.ok
+    assert "disagree" in r.err, r.err
+    assert board.sim_history[-1].cross_agreed is False
+
+
+def waves_land_on_disk() -> None:
+    board, tmp = fresh(Board(status="simulating", rtl_history=[GOOD_RTL], testbench=GOOD_TB))
+    SimRunnerAgent.waves = True
+    try:
+        r = SimRunnerAgent().run(board)
+    finally:
+        SimRunnerAgent.waves = False
+    assert r.ok, r.err
+    last = board.sim_history[-1]
+    assert last.wave_file == "waves/dump.vcd", last.wave_file
+    produced = tmp / last.wave_file
+    assert produced.exists() and produced.stat().st_size > 0, produced
+    # $dumpfile cannot create a directory, so the name in the testbench has to be flat
+    assert '$dumpfile("dump.vcd")' in (tmp / "work" / "tb_counter.v").read_text()
+
+
 def main() -> None:
     lint_ok()
     lint_catches_broken()
@@ -148,9 +211,14 @@ def main() -> None:
     ambiguous_refused()
     compile_fail()
     synth_cells()
+    cross_sim_agrees()
+    cross_sim_tracks_a_real_failure()
+    cross_sim_disagreement_fails_the_run()
+    waves_land_on_disk()
     no_llm_anywhere()
     missing_inputs_refused()
-    print("tool-only agents: lint/sim/synth verified on real docker tools, ambiguity refused, no LLM refs")
+    print("tool-only agents: lint/sim/synth verified on real docker tools, cross-check agrees, "
+          "waveform dumped, ambiguity refused, no LLM refs")
 
 
 if __name__ == "__main__":

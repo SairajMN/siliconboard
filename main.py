@@ -12,6 +12,7 @@ from pathlib import Path
 
 import llm
 from agents.report import ReportAgent
+from agents.simrunner import SimRunnerAgent
 from agents.spec import SpecAgent  # noqa: F401  kept: doctor and docs reference the first agent
 from board import Board, DesignStatus
 from orchestrator import STOP, Orchestrator
@@ -95,11 +96,15 @@ def acquire_lock(run_dir: Path) -> bool:
     return True
 
 
-def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None, inject: str | None = None) -> int:
+def run_pipeline(spec_file: Path, run_id: str, stop_after: str | None, inject: str | None = None,
+                 cross_sim: bool = False, waves: bool = False) -> int:
     run_dir = ROOT / "runs" / run_id
     if not acquire_lock(run_dir):
         return 1
     llm.set_cache_dir(run_dir / "llm")
+    # both are opt-in evidence modes, so they stay off for ordinary runs
+    SimRunnerAgent.cross_sim = cross_sim
+    SimRunnerAgent.waves = waves
 
     if (run_dir / "board.json").exists():
         board = Board.load(run_dir)
@@ -182,6 +187,10 @@ def main(argv: list[str] | None = None) -> int:
     run_cmd.add_argument("--stop-after", choices=list(STOP))
     run_cmd.add_argument("--inject-bug", choices=["reset"], default=None,
                          help="sabotage the generated RTL once, to exercise the debug loop on demand")
+    run_cmd.add_argument("--cross-sim", action="store_true",
+                         help="re-run the testbench under icarus too; disagreement fails the run")
+    run_cmd.add_argument("--waves", action="store_true",
+                         help="dump a VCD waveform alongside the run for the demo")
 
     diff_cmd = sub.add_parser("diff", help="diff the last two RTL versions of a run, with its bug reports")
     diff_cmd.add_argument("--run-id", required=True)
@@ -192,7 +201,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "spec":
         return run_spec(args.file, args.run_id)
     if args.command == "run":
-        return run_pipeline(args.spec, args.run_id, args.stop_after, args.inject_bug)
+        return run_pipeline(args.spec, args.run_id, args.stop_after, args.inject_bug,
+                            cross_sim=args.cross_sim, waves=args.waves)
     if args.command == "diff":
         return run_diff(args.run_id)
     return 2

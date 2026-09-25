@@ -54,26 +54,36 @@ class SimRunnerAgent(BaseAgent):
         if passed is None:
             board.ambiguity = result.ambiguity
             return AgentResult(ok=False, err="ambiguous sim verdict, refusing to guess", log=log)
+
+        if self.cross_sim:
+            checked = self._cross_check(board, work, rtl, tb, tb_top, result, total, failed)
+            if not checked.ok:
+                return checked
+            note = f"checks={total} failed={failed} agreed={result.cross_agreed}"
+        else:
+            note = f"checks={total} failed={failed}"
+
+        # the cross-check is evidence, not a gate on failure: two engines agreeing on
+        # FAIL just means the bug is real, and the backward route stays the same
         if not passed:
-            return AgentResult(ok=False, err=f"simulator reported FAIL: {failed} of {total} checks failed", log=log)
-
-        if not self.cross_sim:
-            return AgentResult(ok=True, note=f"checks={total} failed={failed}")
-
-        return self._cross_check(board, work, rtl, tb, tb_top, result, total, failed)
+            return AgentResult(ok=False, err=f"simulator reported FAIL: {failed} of {total} checks failed",
+                               log=log, note=note)
+        return AgentResult(ok=True, note=note)
 
     def _tb_with_waves(self, tb):
-        return tb.model_copy(update={"source_code": with_vcd(tb.source_code, "waves/dump.vcd")})
+        # $dumpfile will not create a directory, and the work dir is the cwd the sim
+        # runs in, so the trace has to land flat there and be moved afterwards
+        return tb.model_copy(update={"source_code": with_vcd(tb.source_code, "dump.vcd")})
 
     def _collect_wave(self, work) -> str | None:
-        produced = [p for p in work.glob("obj_dir/*.vcd")]
+        produced = sorted(work.glob("**/*.vcd"))
         if not produced:
             return None
         target = self.run_dir / "waves"
         target.mkdir(parents=True, exist_ok=True)
         moved = target / "dump.vcd"
         shutil.move(str(produced[0]), moved)
-        return str(moved.relative_to(self.run_dir.parent.parent))
+        return str(moved.relative_to(self.run_dir))
 
     def _cross_check(self, board, work, rtl, tb, tb_top, result, total, failed) -> AgentResult:
         rc2, log2 = simulate_iverilog(work, rtl.filename, tb.filename, tb_top)

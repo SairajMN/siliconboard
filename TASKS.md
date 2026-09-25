@@ -78,8 +78,8 @@ instead of retrying, so you can re-test with one command:
 | W4-02 | `/etc/siliconboard/env` 0600 + systemd unit active | [ ] | `ssh … 'systemctl is-active siliconboard; stat -c %a /etc/siliconboard/env'` |
 | W4-03 | SSH-triggered run leaves board.json and report.md on the server | [ ] | `ssh … 'python3 main.py run --spec examples/counter/spec.txt --run-id live1'` |
 | W4-04 | Replay from a second session, zero LLM calls | [ ] | `ssh … 'python3 main.py replay --run-id live1'` |
-| W4-05 | Dual-sim cross-check, Verilator and Icarus agree | [ ] | `main.py run … --cross-sim` |
-| W4-06 | Waveform dump for the demo | [ ] | `ls -l runs/live1/waves/` |
+| W4-05 | Dual-sim cross-check, Verilator and Icarus agree | [x] | `tests/check_toolonly.py` cross_sim_agrees, cross_sim_disagreement_fails_the_run |
+| W4-06 | Waveform dump for the demo | [x] | `tests/check_toolonly.py` waves_land_on_disk, evidence/W4-05-06-cross-sim-waves.txt |
 | W4-07 | Demo rehearsed 3 times, each ≤5:00, one offline | [ ] | `evidence/W4-07.txt` |
 | W4-08 | Physical design (stretch) never blocks the run | [ ] | `main.py run … --with-pnr` |
 | W4-09 | Ponytail audit #2, README final, checks green | [ ] | `python tests/run_all.py` |

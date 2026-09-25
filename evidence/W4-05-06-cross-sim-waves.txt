@@ -1,0 +1,30 @@
+# W4-05 dual-sim cross-check + W4-06 waveform dump
+
+## the bug the first test missed
+Both engines write a VCD, but $dumpfile will not create a directory:
+pointing it at waves/dump.vcd inside the run work dir silently produced nothing.
+Isolated in the image first, then fixed by dumping flat and moving the file afterwards.
+
+$ docker run ... verilator --binary --trace --top-module tb_w ...
+PASS
+exit=0
+ls: cannot access '*.vcd': No such file or directory   <-- no file, no error
+
+$ docker run ... iverilog -g2005 -s tb_w -o sim.vvp ... && vvp sim.vvp
+PASS
+exit=0
+-rw-r--r-- 1 root root  602 dump.vcd   <-- flat name works on both engines
+
+$ .venv/bin/python tests/run_all.py
+board: round trip and status helpers pass
+parsers: all checks pass
+llm: 6 output schemas convert cleanly, gate repair loop re-prompts
+agents: spec/rtl/testbench/timing gates verified offline (llm faked, no docker)
+routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework verified
+redteam: invented numbers, fabricated quotes, and unearned testbench blames rejected
+
+6 check files passed
+
+$ .venv/bin/python tests/check_toolonly.py
+tool-only agents: lint/sim/synth verified on real docker tools, cross-check agrees, waveform dumped, ambiguity refused, no LLM refs
+EXIT=0
