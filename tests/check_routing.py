@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import orchestrator as orch
+import llm
+import tools
 from agent import AgentResult, BaseAgent
-from board import Board, DesignStatus
+from board import Board, DesignStatus, RunReport
 
 
 class Stub(BaseAgent):
@@ -146,6 +148,37 @@ def a_testbench_blame_reroutes_to_writing_the_testbench() -> None:
     shutil.rmtree(tmp)
 
 
+def replay_rebuilds_the_report_without_calling_anything() -> None:
+    import main as cli
+
+    tmp = Path(tempfile.mkdtemp())
+    (tmp / "runs" / "r").mkdir(parents=True)
+    board = Board(request="counter")
+    board.status = DesignStatus.DONE
+    board.run_report = RunReport(markdown_summary="# done\n\n24 cells.\n")
+    board.save(tmp / "runs" / "r")
+
+    # any outbound call is a bug, so make them all explode
+    class Boom(Exception):
+        pass
+
+    real_call, real_ship = llm.call, tools.run_eda
+    llm.call = tools.run_eda = lambda *a, **k: (_ for _ in ()).throw(Boom("replay made a call"))
+    cli.ROOT = tmp
+    try:
+        assert cli.run_replay("r") == 0
+        assert (tmp / "runs" / "r" / "report.md").read_text() == "# done\n\n24 cells.\n"
+        assert cli.run_replay("missing") == 1
+
+        board.run_report = None
+        board.save(tmp / "runs" / "r")
+        assert cli.run_replay("r") == 1, "a run with no stored report must refuse, not invent one"
+    finally:
+        llm.call, tools.run_eda = real_call, real_ship
+        cli.ROOT = Path(__file__).resolve().parent.parent
+        shutil.rmtree(tmp)
+
+
 def main() -> None:
     forward_pass_reaches_done()
     a_sim_failure_routes_through_debug_and_back()
@@ -156,7 +189,8 @@ def main() -> None:
     a_timing_miss_reworks_then_ships_with_warning()
     timing_recovers_after_one_rework()
     a_testbench_blame_reroutes_to_writing_the_testbench()
-    print("routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework verified")
+    replay_rebuilds_the_report_without_calling_anything()
+    print("routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework, offline replay verified")
 
 
 if __name__ == "__main__":

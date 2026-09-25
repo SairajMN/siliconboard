@@ -1,0 +1,25 @@
+# W4-04 (local rehearsal): offline replay with every API key removed from the environment
+# any llm call would raise on a missing key, so exit 0 proves none were made
+
+$ env -u GEMINI_API_KEY_1 ... -u NVIDIA_API_KEY .venv/bin/python main.py replay --run-id w3-timing2
+llm     report groq:openai/gpt-oss-20b slot=2 in=1662 out=1758 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/w3-timing2/board.json
+exit=0
+
+$ diff /tmp/rep_before.md runs/w3-timing2/report.md
+IDENTICAL
+
+$ diff llm-cache-mtimes-before llm-cache-mtimes-after
+CACHE UNTOUCHED - no llm call was made or cached
+
+$ .venv/bin/python tests/run_all.py
+replayed r from board.json, 0 recorded llm calls, none made now
+status  done
+board   /var/folders/nx/kv4drx2n1s3_mwp7fnh_6z4m0000gn/T/tmp9_why0d4/runs/r/board.json
+no board.json in /var/folders/nx/kv4drx2n1s3_mwp7fnh_6z4m0000gn/T/tmp9_why0d4/runs/missing
+no stored report; this run never reached narration
+routing: forward, backward via debug, stage caps, tb retry, tb-blame reroute, timing rework, offline replay verified
+redteam: invented numbers, fabricated quotes, and unearned testbench blames rejected
+
+6 check files passed

@@ -172,6 +172,24 @@ def run_diff(run_id: str) -> int:
     return 0
 
 
+def run_replay(run_id: str) -> int:
+    """Re-render a finished run from its board.json. No LLM, no EDA tool, no network."""
+    run_dir = ROOT / "runs" / run_id
+    if not (run_dir / "board.json").exists():
+        print(f"no board.json in {run_dir}")
+        return 1
+    board = Board.load(run_dir)
+
+    if board.run_report is None:
+        print("no stored report; this run never reached narration")
+        return 1
+
+    (run_dir / "report.md").write_text(board.run_report.markdown_summary.rstrip() + "\n")
+    print(f"replayed {run_id} from board.json, {len(board.llm_calls)} recorded llm calls, none made now")
+    _report(board, run_dir)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="siliconboard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -195,6 +213,9 @@ def main(argv: list[str] | None = None) -> int:
     diff_cmd = sub.add_parser("diff", help="diff the last two RTL versions of a run, with its bug reports")
     diff_cmd.add_argument("--run-id", required=True)
 
+    replay_cmd = sub.add_parser("replay", help="re-render a finished run from its board.json, making no llm calls")
+    replay_cmd.add_argument("--run-id", required=True)
+
     args = parser.parse_args(argv)
     if args.command == "doctor":
         return doctor()
@@ -205,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
                             cross_sim=args.cross_sim, waves=args.waves)
     if args.command == "diff":
         return run_diff(args.run_id)
+    if args.command == "replay":
+        return run_replay(args.run_id)
     return 2
 
 
