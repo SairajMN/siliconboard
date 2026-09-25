@@ -33,13 +33,12 @@ def repair_loop_reruns_the_gate() -> None:
     )
     prompts: list[str] = []
 
-    def fake_provider(provider, key, model, system, prompt, schema, temperature):
+    def fake_provider(*args, **kwargs):
+        prompt = kwargs.get("prompt") if "prompt" in kwargs else args[4]
         prompts.append(prompt)
         return (one_line, 10, 20) if len(prompts) == 1 else (good, 11, 21)
 
-    original = llm._openai_call
-    llm._openai_call = fake_provider
-    try:
+    with llm.fake_all_providers(fake_provider):
         result = llm.call(
             "write a testbench",
             "system",
@@ -48,8 +47,6 @@ def repair_loop_reruns_the_gate() -> None:
             ["groq:openai/gpt-oss-20b"],
             validate=lambda artifact: tb_problems(artifact, "counter"),
         )
-    finally:
-        llm._openai_call = original
 
     assert isinstance(result, TestbenchArtifact), result
     assert len(prompts) == 2, "a schema-valid but unusable answer must be re-prompted once"

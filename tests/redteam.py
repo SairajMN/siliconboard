@@ -79,7 +79,7 @@ class _FakeReport:
         self.markdown = markdown
         self.calls = 0
 
-    def __call__(self, provider, key, model, system, prompt, schema, temperature):
+    def __call__(self, *args, **kwargs):
         self.calls += 1
         return json.dumps({"markdown_summary": self.markdown}), 10, 20
 
@@ -88,17 +88,17 @@ def run_report_agent(markdown: str, run_dir: Path):
     run_dir.mkdir(parents=True, exist_ok=True)
     llm._rings.clear()
     llm._cooling.clear()
+    llm._dead.clear()
     fake = _FakeReport(markdown)
     board = FACT_BOARD.model_copy(deep=True)
-    original_call, original_cache = llm._openai_call, llm._cache_dir
-    llm._openai_call = fake
+    original_cache = llm._cache_dir
     llm.set_cache_dir(run_dir / "llm")
     try:
         agent = ReportAgent()
         agent.run_dir = run_dir
-        result = agent.run(board)
+        with llm.fake_all_providers(fake):
+            result = agent.run(board)
     finally:
-        llm._openai_call = original_call
         llm._cache_dir = original_cache
     return result, board, fake
 
@@ -126,7 +126,7 @@ class _FakeBug:
         self.bug = bug
         self.calls = 0
 
-    def __call__(self, provider, key, model, system, prompt, schema, temperature):
+    def __call__(self, *args, **kwargs):
         self.calls += 1
         return self.bug.model_dump_json(), 10, 20
 
@@ -137,13 +137,12 @@ def run_debug_agent(bug: BugReport, run_dir: Path):
     llm._cooling.clear()
     fake = _FakeBug(bug)
     board = FACT_BOARD.model_copy(deep=True)
-    original_call, original_cache = llm._openai_call, llm._cache_dir
-    llm._openai_call = fake
+    original_cache = llm._cache_dir
     llm.set_cache_dir(run_dir / "llm")
     try:
-        result = DebugAgent().run(board)
+        with llm.fake_all_providers(fake):
+            result = DebugAgent().run(board)
     finally:
-        llm._openai_call = original_call
         llm._cache_dir = original_cache
     return result, board, fake
 
@@ -218,12 +217,8 @@ def debug_gate_only_earns_a_testbench_blame_from_cross_version_evidence(root: Pa
     _llm._rings.clear()
     _llm._cooling.clear()
     fake2 = _FakeBug(lone)
-    original = _llm._openai_call
-    _llm._openai_call = fake2
-    try:
+    with _llm.fake_all_providers(fake2):
         result2 = _Debug().run(board2)
-    finally:
-        _llm._openai_call = original
     assert result2.ok, result2.err
     assert board2.bug_history[-1].blames == "testbench"
 
