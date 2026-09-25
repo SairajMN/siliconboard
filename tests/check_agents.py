@@ -181,6 +181,44 @@ def tb_gate_catches_a_racy_testbench() -> None:
     assert any("always @(posedge clk)" in p for p in problems), problems
 
 
+def tb_gate_catches_a_vacuous_reset_check() -> None:
+    # the testbench from runs/rehearsal-1, which passed a counter whose reset had
+    # been replaced with `if (1'b0)`: it asserted reset at time 0, released it, then
+    # checked the output -- which in a 2-state simulator already reads 0.
+    vacuous = TestbenchArtifact(
+        filename="tb_up_counter8.v",
+        source_code=(ROOT / "tests" / "fixtures" / "tb_vacuous_reset.v").read_text(),
+        test_vectors_description="the testbench that let a reset-less counter pass",
+    )
+    spec = COUNTER_SPEC.model_copy(
+        update={
+            "io_ports": [
+                Port(name="clk", direction="input", width=1),
+                Port(name="reset_n", direction="input", width=1),
+                Port(name="en", direction="input", width=1),
+                Port(name="q", direction="output", width=8),
+            ]
+        }
+    )
+    problems = tb_problems(vacuous, "up_counter8", spec)
+    assert any("2-state" in p for p in problems), problems
+
+    # re-asserting reset after the design has advanced makes the check real again
+    live = vacuous.model_copy(
+        update={
+            "source_code": vacuous.source_code.replace(
+                'check("inc_by_3", count, 8\'d3);',
+                'check("inc_by_3", count, 8\'d3);\n'
+                "        reset_n = 0;\n"
+                "        @(negedge clk);\n"
+                '        check("reset_again", count, 8\'d0);\n'
+                "        reset_n = 1;",
+            )
+        }
+    )
+    assert not any("2-state" in p for p in tb_problems(live, "up_counter8", spec)), tb_problems(live, "up_counter8", spec)
+
+
 def timing_agent_forces_the_verdict_from_a_fake_sta_log() -> None:
     import agents.timing as tim
 
@@ -227,6 +265,7 @@ def main() -> None:
     a_failed_llm_call_leaves_the_board_clean()
     tb_gate_catches_every_bad_shape()
     tb_gate_catches_a_racy_testbench()
+    tb_gate_catches_a_vacuous_reset_check()
     tb_agent_names_its_own_file_and_gates_it()
     timing_agent_forces_the_verdict_from_a_fake_sta_log()
     print("agents: spec/rtl/testbench/timing gates verified offline (llm faked, no docker)")
