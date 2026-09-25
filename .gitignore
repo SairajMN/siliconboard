@@ -3,7 +3,9 @@
 __pycache__/
 *.pyc
 runs/
-pdk/
+# the downloaded liberty is big; the fetch script that gets it is not
+pdk/*
+!pdk/fetch_liberty.py
 obj_dir/
 *.vvp
 *.vcd
