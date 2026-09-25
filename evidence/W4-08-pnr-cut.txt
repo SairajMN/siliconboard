@@ -1,0 +1,20 @@
+# W4-08 physical design (stretch): investigated, cut
+
+Per the cut list this is the first thing to drop, and the probe confirms it should be.
+
+$ docker run --rm openroad/flow-ubuntu22.04-builder:latest which openroad
+exit=1
+
+-> no binary: the published builder image ships the flow scripts and tool builds
+   but not an installed openroad executable.
+
+$ docker pull --platform linux/amd64 openroad/flow-ubuntu22.04
+Error response from daemon: pull access denied for openroad/flow-ubuntu22.04, repository does not exist or may require 'docker login'
+-> pull access denied: the runtime image is not published under that name.
+
+Getting a working OpenROAD would mean building it from source (CUDD + TCL + swig + a
+full ORFS checkout) on emulated amd64, roughly a day of build time and debugging for a
+stage the demo does not need. Cut-list item 1, cut on purpose.
+
+Consequence for the demo: none. The pipeline ends at ANALYZING_TIMING -> DONE
+(or DONE_WITH_WARNING). PLACE_AND_ROUTE stays an unclaimed status in DesignStatus.
