@@ -59,7 +59,64 @@ def tb_problems(tb: TestbenchArtifact, dut: str, spec: DesignSpec | None = None)
     problems.extend(_name_width_problems(tb))
     if spec is not None:
         problems.extend(_reset_order_problems(tb, spec))
+        problems.extend(_reset_live_problems(tb, spec))
     return problems
+
+
+def _reset_active(port: str) -> tuple[str, str]:
+    """(assert_value, deassert_value) literals for a reset port, honouring active-low naming."""
+    if re.search(r"(_n|n|_b|b)$", port, re.I):
+        return "0", "1"
+    return "1", "0"
+
+
+def _reset_assign(lines: list[str], port: str, value: str) -> list[int]:
+    return [
+        i
+        for i, ln in enumerate(lines)
+        if re.search(rf"\b{re.escape(port)}\s*=\s*(?:1'b)?{value}\s*;", ln) and "<=" not in ln
+    ]
+
+
+def _reset_release_line(tb: TestbenchArtifact, spec: DesignSpec) -> tuple[str, int] | None:
+    lines = tb.source_code.splitlines()
+    for port in spec.io_ports:
+        if port.direction != "input" or not _RESET_INPUT.search(port.name):
+            continue
+        _, deassert = _reset_active(port.name)
+        hits = _reset_assign(lines, port.name, deassert)
+        if hits:
+            return port.name, hits[0]
+    return None
+
+
+def _reset_live_problems(tb: TestbenchArtifact, spec: DesignSpec) -> list[str]:
+    """A reset check that only runs while the design is already at its reset value proves nothing.
+
+    Verilator is a 2-state simulator, so an uninitialised register reads as 0. A testbench
+    that asserts reset at time 0, releases it, and then checks the output against the reset
+    value passes even when the DUT's reset logic has been deleted entirely: runs/rehearsal-1
+    passed a counter whose reset had been replaced with `if (1'b0)`.
+
+    The check is only real if reset is asserted a second time, after the design has advanced
+    to some other value, and the output is then expected back at the reset value.
+    """
+    released = _reset_release_line(tb, spec)
+    if released is None:
+        return []
+    port, release = released
+    active, _ = _reset_active(port)
+    lines = tb.source_code.splitlines()
+    reasserted = [i for i in _reset_assign(lines, port, active) if i > release]
+    if reasserted:
+        return []
+    return [
+        f"{port} is asserted only at time 0 and released on line {release + 1}, with no second "
+        "assertion afterwards. Verilator is a 2-state simulator, so the design already reads "
+        "its reset value before reset ever acts: this testbench passes against a DUT whose "
+        "reset logic has been removed. Let the design advance to a non-zero value, assert "
+        f"{port} again, and check the output returns to the reset value"
+    ]
 
 
 def _name_width_problems(tb: TestbenchArtifact) -> list[str]:
@@ -165,7 +222,10 @@ class TestbenchAgent(BaseAgent):
             return tb_lint_problems(artifact, rtl, self.run_dir)
 
         try:
-            tb = llm.call(prompt, self.system, TestbenchArtifact, "testbench", llm.LIGHT, board, validate=gate)
+            # HEAVY, not LIGHT: this is the largest artifact the pipeline emits
+            # (~6k tokens) and rehearsal-1 lost the run to small models
+            # truncating mid-document, which failed schema validation
+            tb = llm.call(prompt, self.system, TestbenchArtifact, "testbench", llm.HEAVY, board, validate=gate)
         except llm.LLMError as exc:
             return AgentResult(ok=False, err=str(exc))
 
