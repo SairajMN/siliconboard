@@ -56,6 +56,38 @@ def repair_loop_reruns_the_gate() -> None:
     assert "unusable" in prompts[1] and "line(s)" in prompts[1], "the repair prompt must quote the gate"
 
 
+def keyless_provider_raises_every_time() -> None:
+    """A provider with no key must fail the same way on every visit.
+
+    The chain visits several models per provider, so the second visit used to
+    reach min() on a cached empty ring and die with ValueError instead of
+    LLMError, which is not something the chain can route around.
+    """
+    import os
+
+    saved = {n: os.environ.pop(n) for n in list(os.environ) if n.startswith("NVIDIA_")}
+    saved_load_env = llm.load_env
+    llm.load_env = lambda: None  # the local .env also holds keys; this case needs none
+    llm._rings.clear()
+    try:
+        for _ in range(3):
+            try:
+                llm._ring("nvidia")
+            except llm.LLMError:
+                continue
+            raise AssertionError("a provider with no key must raise, not hand back a ring")
+        assert "nvidia" not in llm._rings, "an empty ring must not be cached"
+        os.environ["NVIDIA_API_KEY"] = "n" + "0" * 60
+        llm._rings.clear()
+        assert llm._ring("nvidia") == [(0, os.environ["NVIDIA_API_KEY"])], "the single-key ring is wrong"
+    finally:
+        llm._rings.clear()
+        llm.load_env = saved_load_env
+        for name in [n for n in os.environ if n.startswith("NVIDIA_")]:
+            del os.environ[name]
+        os.environ.update(saved)
+
+
 def main() -> None:
     assert llm._unfence('```json\n{"a": 1}\n```') == '{"a": 1}'
     assert llm._unfence('{"a": 1}') == '{"a": 1}'
@@ -83,6 +115,7 @@ def main() -> None:
         for unsupported in ("$ref", "$defs", "anyOf"):
             assert unsupported not in blob, f"{schema.__name__} still contains {unsupported}, Gemini rejects it"
     repair_loop_reruns_the_gate()
+    keyless_provider_raises_every_time()
     print(f"llm: {len(SCHEMAS)} output schemas convert cleanly, gate repair loop re-prompts")
 
 

@@ -103,9 +103,12 @@ def keys(provider: str = "gemini") -> list[tuple[int, str]]:
 
 def _ring(provider: str) -> list[tuple[int, str]]:
     if provider not in _rings:
-        _rings[provider] = keys(provider)
-        if not _rings[provider]:
+        found = keys(provider)
+        if not found:
+            # do not cache the empty list: the chain retries the next model on the same
+            # provider, and a cached [] would skip this guard and reach min() further down
             raise LLMError(f"no {provider.upper()}_API_KEY_1..4 in .env and no {provider.upper()}_API_KEY set")
+        _rings[provider] = found
     return _rings[provider]
 
 
@@ -118,6 +121,8 @@ def _take_key(provider: str) -> tuple[int, str]:
         if _cooling.get((provider, slot), 0.0) <= now:
             _next[provider] = (start + offset + 1) % len(ring)
             return slot, key
+    if not ring:
+        raise LLMError(f"no key available for {provider}")
     slot, key = min(ring, key=lambda kv: _cooling.get((provider, kv[0]), 0.0))
     # long waits belong to the orchestrator, not the key picker: cap it and let the caller move on
     time.sleep(min(max(1.0, _cooling.get((provider, slot), 0.0) - now), 5.0))
