@@ -1,0 +1,21 @@
+# W4-07 rehearsal 3: fully offline demo path
+
+Mechanism: main.py replay re-renders the persisted board with no network.
+Proof: every llm cache file was backdated, then replay ran, then we count how many
+were rewritten. Zero means the demo cannot be broken by a provider outage.
+
+$ find runs/replay-demo/llm -type f -exec touch -t 202001010000 {}
+$ .venv/bin/python main.py replay --run-id replay-demo
+llm     rtl groq:openai/gpt-oss-120b slot=4 in=1207 out=1061 cached=False
+llm     testbench gemini:gemini-3.8-flash slot=-1 in=None out=None cached=True
+llm     timing groq:openai/gpt-oss-20b slot=1 in=919 out=986 cached=False
+llm     report groq:openai/gpt-oss-20b slot=2 in=2336 out=1136 cached=False
+status  done
+board   /Users/sahil/Desktop/HACKATHON/siliconboard/runs/replay-demo/board.json
+exit=0
+
+$ find runs/replay-demo/llm -type f -newermt 2020-01-02 | wc -l
+       0
+
+$ diff -q /tmp/before_replay.md runs/replay-demo/report.md
+IDENTICAL (byte-for-byte)
