@@ -10,6 +10,7 @@ import re
 import ssl
 import sys
 import time
+from contextlib import contextmanager
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -29,19 +30,21 @@ except ImportError:
 
 _SSL_CONTEXT = ssl.create_default_context(cafile=_CAFILE)
 
+# Chains are tried head first. The model ids are the ones that answer today:
+# gemini-3.1-pro is not a real id (it 404s), the 3.1 Pro is the -preview one, and
+# gemini-2.5-pro/2.5-flash have been shut down entirely. Nvidia is out of every
+# chain: each of its models now answers 410 Gone, so it only cost a timeout.
 HEAVY = [
+    "gemini:gemini-3.1-pro-preview",
     "gemini:gemini-3.8-flash",
-    "gemini:gemini-3.7-flash",
     "groq:openai/gpt-oss-120b",
     "groq:qwen/qwen3.8-27b",
-    "nvidia:nvidia/nemotron-3-super-120b-a12b",
 ]
 LIGHT = [
-    "gemini:gemini-3.5-flash-lite",
+    "gemini:gemini-3.8-flash",
     "gemini:gemini-3.1-flash-lite",
     "groq:openai/gpt-oss-20b",
     "groq:qwen/qwen3.8-27b",
-    "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b",
 ]
 
 OPENAI_COMPAT_BASE = {"groq": "https://api.groq.com/openai/v1", "nvidia": "https://integrate.api.nvidia.com/v1"}
@@ -222,6 +225,42 @@ def routes(models: list[str]) -> list[str]:
     return usable or models
 
 
+def _gemini_call(key: str, model: str, system: str, prompt: str, schema: type[T], temperature: float) -> tuple[str, int | None, int | None]:
+    """Kept separate from the routing loop so tests can fake a model answer for any provider."""
+    response = _client_for(key).models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system,
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=temperature,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
+        ),
+    )
+    usage = getattr(response, "usage_metadata", None)
+    return (
+        response.text or "",
+        getattr(usage, "prompt_token_count", None),
+        getattr(usage, "candidates_token_count", None),
+    )
+
+
+@contextmanager
+def fake_all_providers(fn):
+    """Point every provider at one fake, so a test can never reach a live API.
+
+    The chain head changes as models come and go; a test that faked only one
+    provider used to make real calls the day the other provider took the lead.
+    """
+    saved = globals()["_gemini_call"], globals()["_openai_call"]
+    globals()["_gemini_call"] = globals()["_openai_call"] = fn
+    try:
+        yield
+    finally:
+        globals()["_gemini_call"], globals()["_openai_call"] = saved
+
+
 def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
                  schema: type[BaseModel], temperature: float) -> tuple[str, int | None, int | None]:
     body = {
@@ -337,21 +376,7 @@ def call(
             raise
         try:
             if provider == "gemini":
-                response = _client_for(key).models.generate_content(
-                    model=model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system,
-                        response_mime_type="application/json",
-                        response_schema=schema,
-                        temperature=temperature,
-                        max_output_tokens=MAX_OUTPUT_TOKENS,
-                    ),
-                )
-                text = response.text or ""
-                usage = getattr(response, "usage_metadata", None)
-                tokens_in = getattr(usage, "prompt_token_count", None)
-                tokens_out = getattr(usage, "candidates_token_count", None)
+                text, tokens_in, tokens_out = _gemini_call(key, model, system, prompt, schema, temperature)
             else:
                 text, tokens_in, tokens_out = _openai_call(provider, key, model, system, prompt, schema, temperature)
             result = schema.model_validate_json(_unfence(text))
