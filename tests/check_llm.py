@@ -53,6 +53,27 @@ def repair_loop_reruns_the_gate() -> None:
     assert "unusable" in prompts[1] and "line(s)" in prompts[1], "the repair prompt must quote the gate"
 
 
+def thinking_tokens_are_billed() -> None:
+    """A thinking model's output is mostly thought tokens; leaving them out skews the budget."""
+
+    class Usage:
+        prompt_token_count = 12
+        candidates_token_count = 97
+        thoughts_token_count = 1531
+
+    class NoThoughts:
+        prompt_token_count = 12
+        candidates_token_count = 97
+        thoughts_token_count = None
+
+    class NoUsage:
+        pass
+
+    assert llm._billed_output(Usage()) == 1628, "answer tokens must include the thinking billed with them"
+    assert llm._billed_output(NoThoughts()) == 97, "a non-thinking answer is just its tokens"
+    assert llm._billed_output(NoUsage()) is None, "no usage means no count, not zero"
+
+
 def keyless_provider_raises_every_time() -> None:
     """A provider with no key must fail the same way on every visit.
 
@@ -113,6 +134,7 @@ def main() -> None:
             assert unsupported not in blob, f"{schema.__name__} still contains {unsupported}, Gemini rejects it"
     repair_loop_reruns_the_gate()
     keyless_provider_raises_every_time()
+    thinking_tokens_are_billed()
     print(f"llm: {len(SCHEMAS)} output schemas convert cleanly, gate repair loop re-prompts")
 
 
