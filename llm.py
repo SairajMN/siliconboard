@@ -239,11 +239,19 @@ def _gemini_call(key: str, model: str, system: str, prompt: str, schema: type[T]
         ),
     )
     usage = getattr(response, "usage_metadata", None)
-    return (
-        response.text or "",
-        getattr(usage, "prompt_token_count", None),
-        getattr(usage, "candidates_token_count", None),
-    )
+    return response.text or "", getattr(usage, "prompt_token_count", None), _billed_output(usage)
+
+
+def _billed_output(usage) -> int | None:
+    """Output tokens as the provider bills them: the answer plus its thinking.
+
+    candidatesTokenCount excludes thinking: one real verilog prompt returned 97
+    answer tokens against 1531 thought tokens, so reading candidates alone
+    undercounts a thinking model's output by about 15x.
+    """
+    out = getattr(usage, "candidates_token_count", None)
+    thought = getattr(usage, "thoughts_token_count", None) or 0
+    return out + thought if out is not None else None
 
 
 @contextmanager
