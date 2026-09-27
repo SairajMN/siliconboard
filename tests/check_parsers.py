@@ -71,6 +71,44 @@ $enddefinitions $end
     assert info["bytes"] > 0
 
 
+def bus_values_survive_the_parser() -> None:
+    """A vector line is "b<bits> <id>"; testing the whole remainder against the id
+    table dropped every bus, which is why count rendered as nothing at all."""
+    import tempfile
+
+    from tools import draw_vcd
+
+    sample = """$timescale 1ns $end
+ $scope module tb $end
+  $var wire 1 # clk $end
+  $var wire 8 ) count [7:0] $end
+ $upscope $end
+$enddefinitions $end
+#0
+0#
+b00000000 )
+#10
+1#
+b00000001 )
+b00000010 )
+#20
+0#
+b11111111 )
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "dump.vcd"
+        path.write_text(sample)
+        info = read_vcd(path, with_values=True)
+    by_name = {s["name"]: s["id"] for s in info["signals"]}
+    assert len(info["changes"].get(by_name["count"], [])) == 4, info["changes"]
+    assert info["changes"][by_name["clk"]] == [(0, "0"), (10, "1"), (20, "0")]
+
+    drawn = "\n".join(draw_vcd(info, columns=20))
+    assert "count" in drawn, drawn
+    # the sequence line has to name the values, not just mark the transitions
+    assert "0 (0x0)" in drawn and "255 (0xff)" in drawn, drawn
+
+
 def main() -> None:
     assert verdict("CHECK a PASS\nSUMMARY checks=1 failed=0\nPASS") is True
     assert verdict("CHECK a FAIL\nFAIL") is False
@@ -138,6 +176,7 @@ def main() -> None:
     duplicated = spec.model_copy(update={"io_ports": [*spec.io_ports, Port(name="clk", direction="input", width=1)]})
     assert any("declared twice" in p for p in spec_problems(duplicated))
     vcd_header_and_time()
+    bus_values_survive_the_parser()
     print("parsers: all checks pass")
 
 

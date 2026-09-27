@@ -240,16 +240,21 @@ def with_vcd(tb_source: str, vcd_name: str) -> str:
     )
 
 
-def read_vcd(path: Path) -> dict:
-    """Signal names, widths and time span straight out of a VCD header.
+def read_vcd(path: Path, with_values: bool = False) -> dict:
+    """Signal names, widths, time span and optionally the value changes.
 
-    Enough to describe a waveform without a viewer installed, which is the
-    point: a run should be explainable from the terminal alone.
+    Enough to describe and draw a waveform without a viewer installed, which is
+    the point: a run should be explainable from the terminal alone. The values
+    are keyed by the vcd's own id code, so the parser never has to guess which
+    name a change belongs to.
     """
     scope: list[str] = []
     signals: list[dict] = []
+    by_id: dict[str, dict] = {}
+    changes: dict[str, list[tuple[int, str]]] = {}
     timescale = ""
     first = last = None
+    now = 0
     in_header = True
     for line in path.read_text(errors="replace").splitlines():
         line = line.strip()
@@ -263,18 +268,119 @@ def read_vcd(path: Path) -> dict:
                     scope.pop()
             elif line.startswith("$var"):
                 parts = line.split()
-                signals.append({"name": parts[4], "width": int(parts[2]), "scope": ".".join(scope[1:])})
+                # verilator always opens with a TOP scope, but a vcd need not,
+                # so only drop it when it is actually there
+                inner = scope[1:] if scope and scope[0] == "TOP" else scope
+                entry = {"name": parts[4], "width": int(parts[2]),
+                         "scope": ".".join(inner), "id": parts[3]}
+                signals.append(entry)
+                by_id[parts[3]] = entry
             elif line.startswith("$enddefinitions"):
                 in_header = False
             continue
         # the time span lives in the value section, after the header ends
-        if line.startswith("#") and line[1:].isdigit():
-            stamp = int(line[1:])
-            if first is None:
-                first = stamp
-            last = stamp
-    return {"timescale": timescale, "signals": signals, "start": first, "end": last,
-            "bytes": path.stat().st_size}
+        if line.startswith("#"):
+            if line[1:].isdigit():
+                now = int(line[1:])
+                if first is None:
+                    first = now
+                last = now
+            continue
+        if not with_values or not line:
+            continue
+        value, rest = line[0], line[1:]
+        if value == "b":
+            # a vector is "b<bits> <id>"; the guard has to run after the split,
+            # or the whole "00000000 )" is tested against the id table and dropped
+            bits, _, ident = rest.partition(" ")
+            if ident in by_id:
+                changes.setdefault(ident, []).append((now, bits))
+        elif value in "01xzu" and rest in by_id:
+            changes.setdefault(rest, []).append((now, value))
+    out = {"timescale": timescale, "signals": signals, "start": first, "end": last,
+           "bytes": path.stat().st_size}
+    if with_values:
+        out["changes"] = changes
+    return out
+
+
+def _sample(changes: list[tuple[int, str]], stamps: list[int]) -> list[str]:
+    """The value each signal holds at each column, by walking the change list once."""
+    out: list[str] = []
+    idx = 0
+    current = "x"
+    for stamp in stamps:
+        while idx < len(changes) and changes[idx][0] <= stamp:
+            current = changes[idx][1]
+            idx += 1
+        out.append(current)
+    return out
+
+
+def _fmt(value: str, width: int) -> str:
+    if width == 1:
+        return value
+    bits = value.replace("x", "0")
+    try:
+        number = int(bits, 2)
+    except ValueError:
+        return value
+    return f"{number} ({number:#x})"
+
+
+def draw_vcd(info: dict, columns: int = 76, only_top: bool = True) -> list[str]:
+    """An ASCII timing diagram: a row per signal, one column per sampled instant.
+
+    Sampling rather than replaying every edge keeps a clock that toggles
+    thousands of times inside the window from turning into an unreadable smear.
+    """
+    start, end = info.get("start"), info.get("end")
+    if start is None or end is None or end <= start:
+        return ["(no time span in this vcd)"]
+    signals = [s for s in info["signals"] if s["scope"] and not (only_top and "." in s["scope"])]
+    signals = [s for s in signals if info["changes"].get(s["id"])]
+    if not signals:
+        return ["(no value changes in this vcd)"]
+    span = end - start
+    stamps = [start + round(span * c / (columns - 1)) for c in range(columns)]
+
+    label_width = max(len(s["name"]) for s in signals) + 1
+    lines = []
+    for sig in signals:
+        values = _sample(info["changes"][sig["id"]], stamps)
+        if sig["width"] == 1:
+            row = []
+            for c, value in enumerate(values):
+                if c == 0:
+                    row.append("_" if value == "0" else "‾")
+                    continue
+                if value == values[c - 1]:
+                    row.append("_" if value == "0" else "‾")
+                elif values[c - 1] == "0":
+                    row.append("/")
+                else:
+                    row.append("\\")
+            lines.append(f"{sig['name']:<{label_width}}" + "".join(row))
+        else:
+            # a bus: overlapping value labels turn into mush ("0137111222334"),
+            # so the row only marks where the value changed and the sequence is
+            # summarised underneath
+            cells = ["─"] * columns
+            sequence: list[str] = [values[0]]
+            for c in range(1, columns):
+                if values[c] != values[c - 1]:
+                    cells[c] = "┐"
+                    sequence.append(values[c])
+            cells[0] = "┌"
+            cells[-1] = "┘"
+            lines.append(f"{sig['name']:<{label_width}}" + "".join(cells))
+            labels = [f"{_fmt(v, sig['width'])}" for v in sequence]
+            if len(labels) > 12:
+                shown = " ".join(labels[:6]) + f" … {len(labels) - 10} more … " + " ".join(labels[-4:])
+            else:
+                shown = " ".join(labels)
+            lines.append(f"{'':<{label_width}}{shown}")
+    return lines
 
 
 def human_time(stamp: int | None, timescale: str) -> str:

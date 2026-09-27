@@ -17,7 +17,7 @@ from agents.simrunner import SimRunnerAgent
 from agents.spec import SpecAgent  # noqa: F401  kept: doctor and docs reference the first agent
 from board import Board, DesignStatus
 from orchestrator import STOP, Orchestrator
-from tools import IMAGE, human_time, read_vcd, run_eda
+from tools import IMAGE, draw_vcd, human_time, read_vcd, run_eda
 
 ROOT = Path(__file__).resolve().parent
 
@@ -203,7 +203,14 @@ def wave_viewer() -> str | None:
     return None
 
 
-def run_waves(run_id: str | None, open_it: bool) -> int:
+NO_VIEWER = (
+    "\nno waveform viewer installed, so --draw is the only picture."
+    "\nfor a real GUI one, surfer (github.com/thesurver/surfer) ships as a .dmg on"
+    "\nits releases page - there is no homebrew cask, and gtkwave is disabled."
+)
+
+
+def run_waves(run_id: str | None, open_it: bool, draw: bool, columns: int) -> int:
     """List or inspect the VCDs a run produced. Neither needs a viewer installed."""
     runs_dir = ROOT / "runs"
     found = []
@@ -235,10 +242,10 @@ def run_waves(run_id: str | None, open_it: bool) -> int:
         target = found[-1][2][0]
         if viewer:
             print(f"\nopen with:  {viewer} {target.relative_to(ROOT)}")
+            print(f"or draw it:  main.py waves --run-id {found[-1][0]} --draw")
         else:
-            print("\nno waveform viewer found. install one:")
-            print("  brew install --cask surfer     # recommended, or: brew install gtkwave")
-        print("\n`main.py waves --run-id <run> --open` opens it directly once installed")
+            print(NO_VIEWER)
+            print(f"or draw it:  main.py waves --run-id {found[-1][0]} --draw")
         return 0
 
     matches = [w for w in found if w[0] == run_id]
@@ -247,9 +254,14 @@ def run_waves(run_id: str | None, open_it: bool) -> int:
         return 1
     _, _, waves = matches[0]
     vcd = waves[0]
-    info = read_vcd(vcd)
+    info = read_vcd(vcd, with_values=True)
     print(f"{vcd.relative_to(ROOT)}  {info['bytes'] // 1024}K")
     print(f"timescale {info['timescale']}   span {human_time(info['start'], info['timescale'])} -> {human_time(info['end'], info['timescale'])}")
+    if draw:
+        print()
+        for line in draw_vcd(info, columns=columns):
+            print("  " + line)
+        return 0
     print(f"\n{'width':>5}  {'scope':<10} signal")
     for sig in info["signals"]:
         print(f"{sig['width']:5d}  {sig['scope'] or '-':<10} {sig['name']}")
@@ -260,8 +272,8 @@ def run_waves(run_id: str | None, open_it: bool) -> int:
     elif viewer:
         print(f"\nopen with:  {viewer} {vcd.relative_to(ROOT)}")
     else:
-        print("\nno waveform viewer found. install one:")
-        print("  brew install --cask surfer     # recommended, or: brew install gtkwave")
+        print(NO_VIEWER)
+        print(f"or draw it:  main.py waves --run-id {run_id} --draw")
     return 0
 
 
@@ -294,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     waves_cmd = sub.add_parser("waves", help="list or inspect the waveform a run dumped")
     waves_cmd.add_argument("--run-id")
     waves_cmd.add_argument("--open", action="store_true", help="launch the viewer on it")
+    waves_cmd.add_argument("--draw", action="store_true", help="draw it in the terminal instead")
+    waves_cmd.add_argument("--columns", type=int, default=76)
 
     args = parser.parse_args(argv)
     if args.command == "doctor":
@@ -308,7 +322,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "replay":
         return run_replay(args.run_id)
     if args.command == "waves":
-        return run_waves(args.run_id, args.open)
+        return run_waves(args.run_id, args.open, args.draw, args.columns)
     return 2
 
 
