@@ -37,17 +37,23 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=_CAFILE)
 HEAVY = [
     "gemini:gemini-3.1-pro-preview",
     "gemini:gemini-3.8-flash",
+    "openai:gpt-4.1",
     "groq:openai/gpt-oss-120b",
     "groq:qwen/qwen3.8-27b",
 ]
 LIGHT = [
     "gemini:gemini-3.8-flash",
     "gemini:gemini-3.1-flash-lite",
+    "openai:gpt-4.1-mini",
     "groq:openai/gpt-oss-20b",
     "groq:qwen/qwen3.8-27b",
 ]
 
-OPENAI_COMPAT_BASE = {"groq": "https://api.groq.com/openai/v1", "nvidia": "https://integrate.api.nvidia.com/v1"}
+OPENAI_COMPAT_BASE = {
+    "groq": "https://api.groq.com/openai/v1",
+    "nvidia": "https://integrate.api.nvidia.com/v1",
+    "openai": "https://api.openai.com/v1",
+}
 
 MAX_OUTPUT_TOKENS = 8192
 CALL_BUDGET_S = 240
@@ -163,12 +169,32 @@ def live_models(provider: str, key: str) -> list[str]:
     return _live.get(provider, [])
 
 
+# replacement preference per provider: the catalog is scanned for the first match
+PREFER = {
+    "groq": ("120b", "coder", "70b", "gpt-oss"),
+    "openai": ("gpt-4.1", "gpt-4o"),
+    "nvidia": ("coder", "70b", "nemotron"),
+}
+# an account catalog lists far more than chat models, and picking one of these
+# would 400 on /chat/completions; the alphabetical fallback used to land on
+# "dall-e-3" or "text-embedding-3-large" for openai
+NOT_CHAT = ("embed", "dall-e", "whisper", "tts", "moderation", "image", "audio",
+            "realtime", "transcribe", "search", "video", "guard")
+
+
+def chat_models(provider: str, key: str) -> list[str]:
+    return [
+        m for m in live_models(provider, key)
+        if not any(bad in m.lower() for bad in NOT_CHAT)
+    ]
+
+
 def _replacement_model(provider: str, dead: str, key: str) -> str | None:
-    ids = live_models(provider, key)
+    ids = chat_models(provider, key)
     if dead in ids or not ids:
         return None
     usable = [i for i in ids if (provider, i) not in _unprovisioned]
-    for pref in PREFER:
+    for pref in PREFER.get(provider, ()):
         for i in usable:
             if pref in i.lower():
                 return i
@@ -220,8 +246,30 @@ def _next_after_repair(models: list[str], model_idx: int, repairs: int) -> tuple
     return model_idx, repairs
 
 
+_keyless: set[str] = set()
+
+
+def _has_key(provider: str) -> bool:
+    """Whether this provider has anything to call with. Checked once, then remembered."""
+    if provider not in _keyless:
+        if not keys(provider):
+            _keyless.add(provider)
+    return provider not in _keyless
+
+
 def routes(models: list[str]) -> list[str]:
-    usable = [route for route in models if route.partition(":")[0] not in _dead]
+    """Drop providers that are dead for this run or have no key configured.
+
+    Chains stay declarative: a provider nobody has credentials for simply drops
+    out instead of costing a failed attempt on every call. If that would empty
+    the chain, keep it so the caller reports the missing key rather than an
+    empty list.
+    """
+    usable = [
+        route
+        for route in models
+        if route.partition(":")[0] not in _dead and _has_key(route.partition(":")[0])
+    ]
     return usable or models
 
 
