@@ -76,17 +76,25 @@ There is no web UI. A run is three things you can open: the report, the board,
 and — with `--waves` — a VCD waveform.
 
 ```bash
-brew install --cask surfer                          # a waveform viewer, once
 .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w1 --waves
 .venv/bin/python main.py waves                      # every run that dumped one
 .venv/bin/python main.py waves --run-id w1          # signals, widths, time span
-.venv/bin/python main.py waves --run-id w1 --open   # launch the viewer
+.venv/bin/python main.py waves --run-id w1 --draw   # draw it here, no viewer needed
+.venv/bin/python main.py waves --run-id w1 --open   # launch a GUI viewer, if one is installed
 ```
 
-`main.py waves` parses the VCD header itself, so the signal list and the time
-span print with or without a viewer installed. The waveform shows behaviour
-over time — it is not a schematic, and for an 8-bit counter a picture of 28
-cells would tell you less than `main.py diff` does.
+`--draw` is the default answer: it parses the VCD itself and prints a timing
+diagram in the terminal, so nothing has to be installed. Buses also get their
+value sequence printed underneath, so `count` reads as `0 1 2 … 255` rather
+than a smear of overlapping labels.
+
+There is no `brew install` for a VCD viewer that works — `surfer` has no cask
+and `gtkwave` is disabled in Homebrew. If you want a real GUI, `surfer`
+(the VCD viewer at `github.com/thesurver/surfer`) ships a `.dmg` on its
+releases page. `--open` uses `surfer`, `gtkwave` or `vcd2fst` if any is present.
+
+`--draw` is behaviour over time, not a schematic. For an 8-bit counter a
+picture of 28 cells would tell you less than `main.py diff` does.
 
 ## Conventions
 
