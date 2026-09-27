@@ -39,7 +39,11 @@ def doctor() -> int:
     print(f"python   {platform.python_version()} on {platform.machine()}")
 
     total = 0
-    for provider in ("gemini", "groq", "nvidia"):
+    # derived from the chains so a new provider can never be added without doctor knowing
+    providers = list(dict.fromkeys(
+        route.partition(":")[0] for route in llm.HEAVY + llm.LIGHT
+    ))
+    for provider in providers:
         found = llm.keys(provider)
         total += len(found)
         for slot, key in found:
@@ -47,7 +51,8 @@ def doctor() -> int:
         if not found:
             print(f"key {provider}:  none (fallback chain skips it)")
     if not total:
-        print("keys     none found: put GEMINI_API_KEY_1..4 / GROQ_API_KEY_1..4 / NVIDIA_API_KEY in .env")
+        names = " / ".join(f"{p.upper()}_API_KEY" for p in providers)
+        print(f"keys     none found: put {names} in .env")
 
     problem = docker_problem()
     if problem is not None:
