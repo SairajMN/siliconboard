@@ -115,17 +115,19 @@ def keyless_providers_leave_the_chain() -> None:
     import os
 
     saved = {n: v for n, v in os.environ.items() if n.startswith("OPENAI_")}
+    saved_load_env = llm.load_env
+    llm.load_env = lambda: None  # .env on the developer's disk would refill what we remove
     for name in list(saved):
         del os.environ[name]
     llm._keyless.clear()
     try:
-        pruned = llm.routes(["openai:gpt-4.1", "groq:openai/gpt-oss-20b"])
+        pruned = llm.routes(["openai:gpt-5.4", "groq:openai/gpt-oss-20b"])
         assert pruned == ["groq:openai/gpt-oss-20b"], f"keyless provider stayed in the chain: {pruned}"
         assert llm._has_key("openai") is False
         os.environ["OPENAI_API_KEY_1"] = "sk-test"
         llm._keyless.clear()
-        assert llm.routes(["openai:gpt-4.1", "groq:openai/gpt-oss-20b"]) == [
-            "openai:gpt-4.1",
+        assert llm.routes(["openai:gpt-5.4", "groq:openai/gpt-oss-20b"]) == [
+            "openai:gpt-5.4",
             "groq:openai/gpt-oss-20b",
         ], "a provider with a key must stay"
         # an all-keyless chain is returned untouched so the caller reports the missing key
@@ -136,11 +138,11 @@ def keyless_providers_leave_the_chain() -> None:
         assert llm.routes(["groq:x"]) == ["groq:x"], "an empty result would hide the reason"
     finally:
         llm._keyless.clear()
+        llm.load_env = saved_load_env
         for name in [n for n in os.environ if n.startswith("OPENAI_") or n.startswith("GROQ_")]:
             del os.environ[name]
         os.environ.update(saved)
-        for i in range(1, 5):
-            os.environ[f"GROQ_API_KEY_{i}"] = f"g{i}000000000000000000"
+        saved_load_env()
 
 
 def replacement_stays_a_chat_model() -> None:
@@ -171,6 +173,60 @@ def replacement_stays_a_chat_model() -> None:
     llm._live["openai"] = ["text-embedding-3-large", "dall-e-3", "whisper-1"]
     assert llm._replacement_model("openai", "gone", "sk-test") is None, "a catalog of non-chat models has no replacement"
     llm._live.pop("openai", None)
+
+
+def openai_request_shape() -> None:
+    """openai renamed the output cap and rejects max_tokens on every gpt-5/o model.
+
+    Measured against the live endpoint: gpt-4.1 answers "Unsupported parameter:
+    'max_tokens'" for the reasoning families while accepting
+    max_completion_tokens, and groq/nvidia still need max_tokens.
+    """
+    from board import DesignSpec
+
+    seen: list[dict] = []
+
+    saved_call = llm.urllib.request.urlopen
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"choices": [{"message": {"content": "{}"}}]}).encode()
+
+    def fake_urlopen(req, *a, **kw):
+        seen.append(json.loads(req.data.decode()))
+        return FakeResp()
+
+    llm.urllib.request.urlopen = fake_urlopen
+    try:
+        for provider in ("openai", "groq"):
+            seen.clear()
+            try:
+                llm._openai_call(provider, "sk-x", "gpt-5.4", "sys", "hi", DesignSpec, 0.1)
+            except Exception:
+                pass
+            if not seen:
+                continue
+            body = seen[-1]
+            if provider == "openai":
+                assert "max_completion_tokens" in body, f"openai still sends max_tokens: {sorted(body)}"
+                assert "max_tokens" not in body, "sending both is a 400 on the reasoning models"
+            else:
+                assert "max_tokens" in body, f"{provider} needs max_tokens"
+    finally:
+        llm.urlopen = saved_call
+
+
+def non_chat_models_are_filtered() -> None:
+    """The real catalog answered 404 "not a chat model" for each of these."""
+    def blocked(model: str) -> bool:
+        return any(bad in model.lower() for bad in llm.NOT_CHAT)
+
+    for bad in ("babbage-002", "davinci-002", "gpt-live-1", "sora-2", "text-embedding-3-large",
+                "dall-e-3", "whisper-1", "chat-latest", "gpt-3.5-turbo-instruct", "gpt-4o-audio-preview"):
+        assert blocked(bad), f"{bad} would be offered as a chat model"
+    for good in ("gpt-5.4", "gpt-4.1", "gpt-4o", "o4-mini", "gpt-4.1-mini", "gpt-5.4-mini"):
+        assert not blocked(good), f"{good} is a real chat model but got filtered"
 
 
 def main() -> None:
@@ -204,6 +260,8 @@ def main() -> None:
     thinking_tokens_are_billed()
     keyless_providers_leave_the_chain()
     replacement_stays_a_chat_model()
+    non_chat_models_are_filtered()
+    openai_request_shape()
     print(f"llm: {len(SCHEMAS)} output schemas convert cleanly, gate repair loop re-prompts")
 
 
