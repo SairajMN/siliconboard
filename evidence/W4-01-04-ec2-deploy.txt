@@ -1,0 +1,57 @@
+# W4-01..W4-04: deployed on one EC2 instance, verified end to end
+
+Box: i-0814c75a61a9c37c4, t3.micro, ap-south-1, Ubuntu 24.04.5, 2 vCPU, 909 MiB
+RAM, 20 GB gp3. The SSH rule is pinned to one IP and had to be rotated when the
+client's public address changed (106.202.103.142 -> 106.192.245.158); the first
+symptom was a timeout while the instance was still "running".
+
+$ docker images --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep siliconboard
+siliconboard/eda:1.0 713MB
+siliconboard/sta:1.0 2.02GB
+
+$ systemctl is-active siliconboard ; stat -c %a /etc/siliconboard/env
+active
+600
+
+OpenSTA is built from source because ubuntu 24.04 does not package sta. On
+909 MiB of RAM it swaps (1.2 GB of the 3 GB swapfile during the C++ link) and
+takes about 17 minutes end to end. SKIP_STA=1 skips it, and the timing stage
+then has no real slack to report.
+
+$ python3 main.py run --spec examples/counter/spec.txt --run-id live2
+event   19:18:28 [drafting_spec] spec: saturating_counter_8b, 4 ports, target 200.0 MHz
+event   19:18:41 [generating_rtl] rtl v1: saturating_counter_8b via gemini:gemini-3.1-pro-preview
+event   19:18:42 [linting] lint: clean, 0 warnings
+event   19:19:19 [writing_testbench] testbench: tb_saturating_counter_8b, 91 lines
+event   19:19:29 [simulating] sim: checks=10 failed=0 verdict=True
+event   19:19:29 [synthesizing] synth: 28 cells
+event   19:19:34 [analyzing_timing] timing: slack=3.34 ns target=200.0 MHz MET via OpenSTA
+event   19:19:40 [done] report: 187 words
+status  done
+
+  -> the slack line is real OpenSTA on the server's own liberty file, parsed by
+     tools.slack_from_sta; the model only wrote the prose next to it.
+
+Replay, with every cached model answer backdated so a new write would show up:
+
+$ python3 main.py replay --run-id live2
+$ diff -q report_before.md runs/live2/report.md  ->  IDENTICAL
+$ find runs/live2/llm -type f -newermt 2021-01-01 | wc -l  ->  0
+  -> byte-identical report and no cache file rewritten: zero llm calls.
+
+Keys on the server: 4 Gemini + 4 Groq, in /etc/siliconboard/env, mode 600,
+loaded through the systemd EnvironmentFile and never committed. The nvidia key
+that was there first has been removed: every model in its chain answers 410 Gone.
+
+Two false alarms worth recording:
+
+  - A stale run dir resumed an old board already at spec_agent retry 1, so the
+    next attempt tripped attempts 2 > cap 1 and gave up without making any llm
+    call. The nvidia error text in the log was the *old stored* error, which
+    made it look like the chain fix had not deployed. It had.
+  - pgrep reported the run "exited" while it was alive; the run.lock guard
+    correctly refused a second writer for the same run id.
+
+Not closed: bedrock stays a no-op fallback. The ABSK keys authenticate against
+bedrock-runtime, but every third-party model answers "Operation not allowed"
+until it is enabled in the console for that account.
