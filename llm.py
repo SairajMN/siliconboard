@@ -37,14 +37,14 @@ _SSL_CONTEXT = ssl.create_default_context(cafile=_CAFILE)
 HEAVY = [
     "gemini:gemini-3.1-pro-preview",
     "gemini:gemini-3.8-flash",
-    "openai:gpt-4.1",
+    "openai:gpt-5.4",
     "groq:openai/gpt-oss-120b",
     "groq:qwen/qwen3.8-27b",
 ]
 LIGHT = [
     "gemini:gemini-3.8-flash",
     "gemini:gemini-3.1-flash-lite",
-    "openai:gpt-4.1-mini",
+    "openai:gpt-5.4-mini",
     "groq:openai/gpt-oss-20b",
     "groq:qwen/qwen3.8-27b",
 ]
@@ -172,14 +172,18 @@ def live_models(provider: str, key: str) -> list[str]:
 # replacement preference per provider: the catalog is scanned for the first match
 PREFER = {
     "groq": ("120b", "coder", "70b", "gpt-oss"),
-    "openai": ("gpt-4.1", "gpt-4o"),
+    "openai": ("gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4o"),
     "nvidia": ("coder", "70b", "nemotron"),
 }
 # an account catalog lists far more than chat models, and picking one of these
 # would 400 on /chat/completions; the alphabetical fallback used to land on
-# "dall-e-3" or "text-embedding-3-large" for openai
+# "dall-e-3" or "text-embedding-3-large" for openai. Verified against the real
+# catalog: babbage-002, davinci-002 and gpt-live-1 all answer 404 "not a chat
+# model", sora-* is video, and chat-latest is a reasoning alias that wants
+# max_completion_tokens.
 NOT_CHAT = ("embed", "dall-e", "whisper", "tts", "moderation", "image", "audio",
-            "realtime", "transcribe", "search", "video", "guard")
+            "realtime", "transcribe", "search", "video", "guard", "sora",
+            "babbage", "davinci", "chat-latest", "live", "instruct")
 
 
 def chat_models(provider: str, key: str) -> list[str]:
@@ -319,6 +323,10 @@ def fake_all_providers(fn):
 
 def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
                  schema: type[BaseModel], temperature: float) -> tuple[str, int | None, int | None]:
+    # openai renamed the output cap: every gpt-5 and o-series model rejects
+    # max_tokens outright ("Unsupported parameter"), while gpt-4.1 and gpt-4o
+    # accept max_completion_tokens just as well. groq and nvidia keep max_tokens.
+    cap_key = "max_completion_tokens" if provider == "openai" else "max_tokens"
     body = {
         "model": model,
         "messages": [
@@ -329,7 +337,7 @@ def _openai_call(provider: str, key: str, model: str, system: str, prompt: str,
             {"role": "user", "content": prompt},
         ],
         "temperature": temperature,
-        "max_tokens": _cap.get(f"{provider}:{model}") or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS,
+        cap_key: _cap.get(f"{provider}:{model}") or PROVIDER_MAX_TOKENS.get(provider) or MAX_OUTPUT_TOKENS,
         "response_format": {"type": "json_object"},
     }
     req = urllib.request.Request(
