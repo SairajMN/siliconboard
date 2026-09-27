@@ -33,6 +33,7 @@ cp .env.example .env && chmod 600 .env               # add GEMINI_API_KEY_1..4
     --cross-sim --waves                      # two simulators, waveform dumped
 .venv/bin/python main.py diff --run-id demo1 # what the debug loop changed
 .venv/bin/python main.py replay --run-id demo1   # re-render the report, no LLM calls
+.venv/bin/python main.py waves                  # which runs dumped a waveform, and how to open it
 ```
 
 Every run leaves `runs/<id>/board.json` — the whole design history, one entry per
@@ -68,6 +69,24 @@ asserts that a cell count parses.
 | `deploy/` | server bootstrap, systemd unit, compose file |
 | `TASKS.md` | the ledger: every task, its verify command, its evidence file |
 | `PONYTAIL-DEBT.md` | every shortcut still in the tree, with the trigger that retires it |
+
+## Seeing the design
+
+There is no web UI. A run is three things you can open: the report, the board,
+and — with `--waves` — a VCD waveform.
+
+```bash
+brew install --cask surfer                          # a waveform viewer, once
+.venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w1 --waves
+.venv/bin/python main.py waves                      # every run that dumped one
+.venv/bin/python main.py waves --run-id w1          # signals, widths, time span
+.venv/bin/python main.py waves --run-id w1 --open   # launch the viewer
+```
+
+`main.py waves` parses the VCD header itself, so the signal list and the time
+span print with or without a viewer installed. The waveform shows behaviour
+over time — it is not a schematic, and for an 8-bit counter a picture of 28
+cells would tell you less than `main.py diff` does.
 
 ## Conventions
 
