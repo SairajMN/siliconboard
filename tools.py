@@ -238,3 +238,57 @@ def with_vcd(tb_source: str, vcd_name: str) -> str:
         tb_source,
         count=1,
     )
+
+
+def read_vcd(path: Path) -> dict:
+    """Signal names, widths and time span straight out of a VCD header.
+
+    Enough to describe a waveform without a viewer installed, which is the
+    point: a run should be explainable from the terminal alone.
+    """
+    scope: list[str] = []
+    signals: list[dict] = []
+    timescale = ""
+    first = last = None
+    in_header = True
+    for line in path.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if in_header:
+            if line.startswith("$timescale"):
+                timescale = line.split()[1]
+            elif line.startswith("$scope"):
+                scope.append(line.split()[2])
+            elif line.startswith("$upscope"):
+                if scope:
+                    scope.pop()
+            elif line.startswith("$var"):
+                parts = line.split()
+                signals.append({"name": parts[4], "width": int(parts[2]), "scope": ".".join(scope[1:])})
+            elif line.startswith("$enddefinitions"):
+                in_header = False
+            continue
+        # the time span lives in the value section, after the header ends
+        if line.startswith("#") and line[1:].isdigit():
+            stamp = int(line[1:])
+            if first is None:
+                first = stamp
+            last = stamp
+    return {"timescale": timescale, "signals": signals, "start": first, "end": last,
+            "bytes": path.stat().st_size}
+
+
+def human_time(stamp: int | None, timescale: str) -> str:
+    """A VCD timescale is a magnitude and a unit together, e.g. "1ps" or "10ns"."""
+    if stamp is None:
+        return "?"
+    match = re.fullmatch(r"(\d+)(s|ms|us|ns|ps)", (timescale or "1ps").strip())
+    if not match:
+        return f"{stamp} {timescale or '?'}"
+    magnitude, unit = int(match.group(1)), match.group(2)
+    to_ps = {"s": 10**12, "ms": 10**9, "us": 10**6, "ns": 10**3, "ps": 1}[unit]
+    picoseconds = stamp * magnitude * to_ps
+    # largest unit first, so 2610000 ps reads as 2.61 us and not 2610 ns
+    for nice, factor in (("s", 10**12), ("ms", 10**9), ("us", 10**6), ("ns", 10**3)):
+        if picoseconds >= factor:
+            return f"{picoseconds / factor:g} {nice}"
+    return f"{picoseconds} ps"

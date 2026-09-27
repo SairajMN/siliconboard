@@ -6,6 +6,7 @@ import argparse
 import difflib
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,7 @@ from agents.simrunner import SimRunnerAgent
 from agents.spec import SpecAgent  # noqa: F401  kept: doctor and docs reference the first agent
 from board import Board, DesignStatus
 from orchestrator import STOP, Orchestrator
-from tools import IMAGE, run_eda
+from tools import IMAGE, human_time, read_vcd, run_eda
 
 ROOT = Path(__file__).resolve().parent
 
@@ -195,6 +196,75 @@ def run_replay(run_id: str) -> int:
     return 0
 
 
+def wave_viewer() -> str | None:
+    for name in ("surfer", "gtkwave", "vcd2fst"):
+        if shutil.which(name):
+            return name
+    return None
+
+
+def run_waves(run_id: str | None, open_it: bool) -> int:
+    """List or inspect the VCDs a run produced. Neither needs a viewer installed."""
+    runs_dir = ROOT / "runs"
+    found = []
+    for run_dir in sorted(runs_dir.glob("*")):
+        waves = sorted((run_dir / "waves").glob("*.vcd"))
+        if waves:
+            found.append((run_dir.name, run_dir, waves))
+
+    if run_id is None:
+        if not found:
+            print("no waveforms yet. add --waves to a run:")
+            print(f"  {sys.executable} main.py run --spec examples/counter/spec.txt --run-id w1 --waves")
+            return 1
+        print(f"{'run':14} {'status':10} {'sim':16} {'size':>7}  file")
+        for name, run_dir, waves in found:
+            board_file = run_dir / "board.json"
+            status = sim = "-"
+            if board_file.exists():
+                try:
+                    board = Board.load(run_dir)
+                    status = board.status.value
+                    last = board.sim_history[-1] if board.sim_history else None
+                    if last is not None:
+                        sim = ("PASS" if last.passed else "FAIL") + f" {last.total_checks}/{last.total_checks or '?'} checks"
+                except Exception:
+                    pass
+            print(f"{name:14} {status:10} {sim:16} {waves[0].stat().st_size // 1024:5d}K  {waves[0].relative_to(ROOT)}")
+        viewer = wave_viewer()
+        target = found[-1][2][0]
+        if viewer:
+            print(f"\nopen with:  {viewer} {target.relative_to(ROOT)}")
+        else:
+            print("\nno waveform viewer found. install one:")
+            print("  brew install --cask surfer     # recommended, or: brew install gtkwave")
+        print("\n`main.py waves --run-id <run> --open` opens it directly once installed")
+        return 0
+
+    matches = [w for w in found if w[0] == run_id]
+    if not matches:
+        print(f"no waveform for {run_id}; runs with one: {', '.join(n for n, _, _ in found) or 'none'}")
+        return 1
+    _, _, waves = matches[0]
+    vcd = waves[0]
+    info = read_vcd(vcd)
+    print(f"{vcd.relative_to(ROOT)}  {info['bytes'] // 1024}K")
+    print(f"timescale {info['timescale']}   span {human_time(info['start'], info['timescale'])} -> {human_time(info['end'], info['timescale'])}")
+    print(f"\n{'width':>5}  {'scope':<10} signal")
+    for sig in info["signals"]:
+        print(f"{sig['width']:5d}  {sig['scope'] or '-':<10} {sig['name']}")
+    viewer = wave_viewer()
+    if viewer and open_it:
+        subprocess.Popen([viewer, str(vcd)])
+        print(f"\nopened in {viewer}")
+    elif viewer:
+        print(f"\nopen with:  {viewer} {vcd.relative_to(ROOT)}")
+    else:
+        print("\nno waveform viewer found. install one:")
+        print("  brew install --cask surfer     # recommended, or: brew install gtkwave")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="siliconboard")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -221,6 +291,10 @@ def main(argv: list[str] | None = None) -> int:
     replay_cmd = sub.add_parser("replay", help="re-render a finished run from its board.json, making no llm calls")
     replay_cmd.add_argument("--run-id", required=True)
 
+    waves_cmd = sub.add_parser("waves", help="list or inspect the waveform a run dumped")
+    waves_cmd.add_argument("--run-id")
+    waves_cmd.add_argument("--open", action="store_true", help="launch the viewer on it")
+
     args = parser.parse_args(argv)
     if args.command == "doctor":
         return doctor()
@@ -233,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_diff(args.run_id)
     if args.command == "replay":
         return run_replay(args.run_id)
+    if args.command == "waves":
+        return run_waves(args.run_id, args.open)
     return 2
 
 
