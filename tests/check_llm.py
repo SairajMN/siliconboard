@@ -106,6 +106,73 @@ def keyless_provider_raises_every_time() -> None:
         os.environ.update(saved)
 
 
+def keyless_providers_leave_the_chain() -> None:
+    """A chain route for a provider nobody has a key for must not cost an attempt.
+
+    Otherwise every call pays a doomed _ring lookup, and a provider added for
+    future use would be a tax on runs that have no credentials for it.
+    """
+    import os
+
+    saved = {n: v for n, v in os.environ.items() if n.startswith("OPENAI_")}
+    for name in list(saved):
+        del os.environ[name]
+    llm._keyless.clear()
+    try:
+        pruned = llm.routes(["openai:gpt-4.1", "groq:openai/gpt-oss-20b"])
+        assert pruned == ["groq:openai/gpt-oss-20b"], f"keyless provider stayed in the chain: {pruned}"
+        assert llm._has_key("openai") is False
+        os.environ["OPENAI_API_KEY_1"] = "sk-test"
+        llm._keyless.clear()
+        assert llm.routes(["openai:gpt-4.1", "groq:openai/gpt-oss-20b"]) == [
+            "openai:gpt-4.1",
+            "groq:openai/gpt-oss-20b",
+        ], "a provider with a key must stay"
+        # an all-keyless chain is returned untouched so the caller reports the missing key
+        llm._keyless.clear()
+        for name in list(os.environ):
+            if name.startswith("GROQ_"):
+                del os.environ[name]
+        assert llm.routes(["groq:x"]) == ["groq:x"], "an empty result would hide the reason"
+    finally:
+        llm._keyless.clear()
+        for name in [n for n in os.environ if n.startswith("OPENAI_") or n.startswith("GROQ_")]:
+            del os.environ[name]
+        os.environ.update(saved)
+        for i in range(1, 5):
+            os.environ[f"GROQ_API_KEY_{i}"] = f"g{i}000000000000000000"
+
+
+def replacement_stays_a_chat_model() -> None:
+    """Model self-repair must not answer with an embedding or image model.
+
+    The account catalog is alphabetical, so the old fallback picked
+    "dall-e-3" for openai, which then 400s on /chat/completions.
+    """
+    catalog = [
+        "dall-e-3",
+        "gpt-3.5-turbo",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4o",
+        "text-embedding-3-large",
+        "whisper-1",
+    ]
+    llm._live["openai"] = list(catalog)
+    llm._unprovisioned.clear()
+    picked = llm._replacement_model("openai", "gpt-4.1-pro", "sk-test")
+    assert picked is not None, "a chat model was available and should have been chosen"
+    assert picked in catalog, picked
+    assert not any(bad in picked.lower() for bad in llm.NOT_CHAT), f"replacement is not a chat model: {picked}"
+    # the alphabetical fallback is the real trap: it used to land on dall-e-3
+    llm._live["openai"] = ["aaa-not-a-chat", "dall-e-3", "gpt-4o", "text-embedding-3-large"]
+    fell_back = llm._replacement_model("openai", "gone", "sk-test")
+    assert fell_back == "gpt-4o", f"fallback picked a non-chat model: {fell_back!r}"
+    llm._live["openai"] = ["text-embedding-3-large", "dall-e-3", "whisper-1"]
+    assert llm._replacement_model("openai", "gone", "sk-test") is None, "a catalog of non-chat models has no replacement"
+    llm._live.pop("openai", None)
+
+
 def main() -> None:
     assert llm._unfence('```json\n{"a": 1}\n```') == '{"a": 1}'
     assert llm._unfence('{"a": 1}') == '{"a": 1}'
@@ -135,6 +202,8 @@ def main() -> None:
     repair_loop_reruns_the_gate()
     keyless_provider_raises_every_time()
     thinking_tokens_are_billed()
+    keyless_providers_leave_the_chain()
+    replacement_stays_a_chat_model()
     print(f"llm: {len(SCHEMAS)} output schemas convert cleanly, gate repair loop re-prompts")
 
 
