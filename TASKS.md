@@ -74,10 +74,10 @@ instead of retrying, so you can re-test with one command:
 
 | ID | Task | Status | Verify |
 |---|---|---|---|
-| W4-01 | Server provisioned, EDA image built on the box | [ ] | `ssh … 'docker images \| grep siliconboard'` |
-| W4-02 | `/etc/siliconboard/env` 0600 + systemd unit active | [ ] | `ssh … 'systemctl is-active siliconboard; stat -c %a /etc/siliconboard/env'` |
-| W4-03 | SSH-triggered run leaves board.json and report.md on the server | [ ] | `ssh … 'python3 main.py run --spec examples/counter/spec.txt --run-id live1'` |
-| W4-04 | Replay from a second session, zero LLM calls | [>] | mechanism verified locally (keys stripped, byte-identical report); server leg waits on W4-01, evidence/W4-04-replay-offline.txt |
+| W4-01 | Server provisioned, EDA image built on the box | [x] | i-0814c75a61a9c37c4 t3.micro ap-south-1: eda:1.0 713MB + sta:1.0 2.02GB, evidence/W4-01-04-ec2-deploy.txt |
+| W4-02 | `/etc/siliconboard/env` 0600 + systemd unit active | [x] | `systemctl is-active` -> active, env mode 600, evidence/W4-01-04-ec2-deploy.txt |
+| W4-03 | SSH-triggered run leaves board.json and report.md on the server | [x] | run `live2` reached done: sim 10/10 PASS, 28 cells, slack 3.34 ns MET via OpenSTA, evidence/W4-01-04-ec2-deploy.txt |
+| W4-04 | Replay from a second session, zero LLM calls | [x] | report byte-identical and 0 cache files rewritten after backdating them, evidence/W4-01-04-ec2-deploy.txt |
 | W4-05 | Dual-sim cross-check, Verilator and Icarus agree | [x] | `tests/check_toolonly.py` cross_sim_agrees, cross_sim_disagreement_fails_the_run |
 | W4-06 | Waveform dump for the demo | [x] | `tests/check_toolonly.py` waves_land_on_disk, evidence/W4-05-06-cross-sim-waves.txt |
 | W4-07 | Demo rehearsed 3 times, each ≤5:00, one offline | [x] | rehearsal 1 failed (provider outage + vacuous-reset hole, both root-caused and fixed), rehearsal 2 live inject run passed (v1 FAIL → cited bug → v3 PASS), rehearsal 3 offline replay: 0 LLM calls, byte-identical report; evidence/W4-07-rehearsal-2-inject-loop.txt, evidence/W4-07-rehearsal-3-offline-replay.txt |
