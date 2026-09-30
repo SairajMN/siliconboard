@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# Deploy siliconboard to one EC2 box, from a laptop, with the aws cli.
+#
+# Idempotent: safe to run again on an existing box. It also fixes the thing that
+# actually breaks this every few days - the client public ip rotates, so the
+# security group is re-pinned to whoever is deploying right now.
+#
+#   bash deploy/deploy.sh                     # update and verify an existing box
+#   SKIP_STA=1 bash deploy/deploy.sh          # skip the ~17 min OpenSTA build
+#   bash deploy/deploy.sh --create            # make the instance first
+#   bash deploy/deploy.sh --dry-run           # show what it would do, change nothing
+set -euo pipefail
+
+PROFILE="${PROFILE:-sai}"
+REGION="${REGION:-ap-south-1}"
+NAME="${NAME:-siliconboard}"
+TYPE="${TYPE:-t3.micro}"
+DISK="${DISK:-20}"
+SKIP_STA="${SKIP_STA:-0}"
+REPO_URL="${REPO_URL:-https://github.com/SairajMN/siliconboard.git}"
+CREATE=0
+DRY_RUN=0
+
+for arg in "$@"; do
+    case "$arg" in
+        --create) CREATE=1 ;;
+        --dry-run) DRY_RUN=1 ;;
+        --help|-h) sed -n '2,12p' "$0"; exit 0 ;;
+        *) echo "unknown flag: $arg" >&2; exit 2 ;;
+    esac
+done
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$HERE")"
+KEYFILE="${KEYFILE:-$HOME/.ssh/$NAME}"
+say() { printf '\n== %s\n' "$*"; }
+aws_() { aws --profile "$PROFILE" --region "$REGION" "$@"; }
+run() { if [ "$DRY_RUN" = 1 ]; then echo "  would: $*"; else eval "$@"; fi; }
+
+say "identity and region"
+aws_ sts get-caller-identity --query '[Account,Arn]' --output text
+MYIP="$(curl -s --max-time 15 https://checkip.amazonaws.com | tr -d '\n')"
+[ -n "$MYIP" ] || { echo "could not resolve our public ip"; exit 1; }
+echo "  client ip $MYIP"
+
+if [ "$CREATE" = 1 ]; then
+    say "key pair"
+    if aws_ ec2 describe-key-pairs --key-names "$NAME" >/dev/null 2>&1; then
+        echo "  $NAME key pair already exists"
+    else
+        run "mkdir -p \"$(dirname "$KEYFILE")\""
+        run "ssh-keygen -t ed25519 -N '' -C '${USER}@${NAME}' -f '$KEYFILE'"
+        run "chmod 600 '$KEYFILE'"
+        run "aws --profile '$PROFILE' --region '$REGION' ec2 import-key-pair --key-name '$NAME' --public-key-material fileb://'$KEYFILE.pub' >/dev/null"
+    fi
+
+    say "security group"
+    SG="$(aws_ ec2 describe-security-groups --filters "Name=group-name,Values=$NAME-sg" --query 'SecurityGroups[0].GroupId' --output text 2>/dev/null || true)"
+    if [ -z "$SG" ] || [ "$SG" = None ]; then
+        VPC="$(aws_ ec2 describe-vpcs --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text)"
+        run "SG=\$(aws --profile '$PROFILE' --region '$REGION' ec2 create-security-group --group-name '$NAME-sg' --description 'siliconboard ssh' --vpc-id '$VPC' --query GroupId --output text)"
+        run "aws --profile '$PROFILE' --region '$REGION' ec2 authorize-security-group-ingress --group-id '\$SG' --protocol tcp --port 22 --cidr '$MYIP/32'"
+    else
+        echo "  security group $SG exists"
+    fi
+
+    say "instance"
+    AMI="$(aws_ ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id --query 'Parameter.Value' --output text)"
+    echo "  ami $AMI"
+    run "aws --profile '$PROFILE' --region '$REGION' ec2 run-instances --image-id '$AMI' --instance-type '$TYPE' --key-name '$NAME' --security-group-ids '$NAME-sg' --block-device-mappings 'DeviceName=/dev/sda1,Ebs={VolumeSize='$DISK',VolumeType=gp3}' --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value='$NAME'}]' --query 'Instances[0].InstanceId' --output text"
+fi
+
+say "find the box"
+INSTANCE="$(aws_ ec2 describe-instances --filters "Name=tag:Name,Values=$NAME" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text)"
+case "$INSTANCE" in ""|None) echo "no running instance tagged $NAME (try --create)"; exit 1 ;; esac
+read -r HOST SG < <(aws_ ec2 describe-instances --instance-ids "$INSTANCE" --query 'Reservations[0].Instances[0].[PublicIpAddress,SecurityGroups[0].GroupId]' --output text)
+echo "  $INSTANCE at $HOST, sg $SG"
+
+say "pin ssh to this ip"
+aws_ ec2 describe-security-group-rules --filters "Name=group-id,Values=$SG" \
+    --query 'SecurityGroupRules[?IsEgress==`false` && FromPort==`22`].[SecurityGroupRuleId,CidrIpv4]' --output text \
+  | while read -r RID CIDR; do
+        [ -n "$RID" ] || continue
+        if [ "$CIDR" != "$MYIP/32" ]; then
+            run "aws --profile '$PROFILE' --region '$REGION' ec2 revoke-security-group-ingress --group-id '$SG' --security-group-rule-ids '$RID'"
+            echo "  dropped stale $CIDR"
+        fi
+    done
+if [ "$DRY_RUN" = 0 ]; then
+    if aws_ ec2 describe-security-group-rules --filters "Name=group-id,Values=$SG" --query 'SecurityGroupRules[?IsEgress==`false` && FromPort==`22`].CidrIpv4' --output text | grep -q "$MYIP/32"; then
+        echo "  $MYIP/32 already allowed"
+    else
+        aws_ ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MYIP/32" >/dev/null
+        echo "  allowed $MYIP/32"
+    fi
+fi
+
+SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 -o BatchMode=yes -i "$KEYFILE")
+ssh_() { ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" "$@"; }
+
+say "wait for ssh"
+for i in $(seq 1 30); do
+    if ssh_ true 2>/dev/null; then echo "  up"; break; fi
+    if [ "$i" = 30 ]; then echo "  ssh never came up on $HOST"; exit 1; fi
+    sleep 6
+done
+
+say "sync the repo"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "  would: git fetch + reset --hard origin/main in /opt/siliconboard"
+else
+    ssh_ 'bash -s' <<REMOTE
+set -e
+if [ -d /opt/siliconboard/.git ]; then
+    cd /opt/siliconboard
+    sudo git fetch --quiet origin
+    sudo git reset --hard origin/main
+else
+    sudo git clone --quiet $REPO_URL /opt/siliconboard
+fi
+sudo chown -R ubuntu:ubuntu /opt/siliconboard
+REMOTE
+fi
+
+say "secrets and host setup"
+if [ "$DRY_RUN" = 0 ]; then
+    if [ -f "$ROOT/.env" ]; then
+        scp -q -i "$KEYFILE" -o StrictHostKeyChecking=accept-new "$ROOT/.env" "ubuntu@$HOST:/tmp/sb.env"
+        ssh_ 'sudo install -m 600 -o root -g root /tmp/sb.env /etc/siliconboard/env; rm -f /tmp/sb.env; echo "  env installed 0600"'
+    else
+        echo "  no local .env, leaving the box copy alone"
+    fi
+    ssh_ "SKIP_STA=$SKIP_STA sudo -E bash /opt/siliconboard/deploy/setup.sh" || echo "  setup.sh complained, see above"
+fi
+
+say "verify"
+if [ "$DRY_RUN" = 0 ]; then
+    ssh_ "echo \"  service: \$(systemctl is-active siliconboard)\"; sudo docker images --format '    {{.Repository}}:{{.Tag}}' | grep siliconboard || echo '    (no images built yet)'; echo '  recent runs:'; ls /opt/siliconboard/runs 2>/dev/null | tail -3 | sed 's/^/    /' || true"
+fi
+
+echo
+printf 'done\n'
+printf '  ssh -i %s ubuntu@%s\n' "$KEYFILE" "$HOST"
+printf "  then: cd /opt/siliconboard && .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id live1\n"
