@@ -66,7 +66,7 @@ asserts that a cell count parses.
 | `tests/` | assert-based checks, no test framework |
 | `evidence/` | raw output of each verified task |
 | `demo/` | the 5-minute script and the golden run snapshots it replays |
-| `deploy/` | server bootstrap, systemd unit, compose file |
+| `deploy/` | one-command laptop deploy (`deploy.sh`), server bootstrap, systemd unit, compose file |
 | `TASKS.md` | the ledger: every task, its verify command, its evidence file |
 | `PONYTAIL-DEBT.md` | every shortcut still in the tree, with the trigger that retires it |
 

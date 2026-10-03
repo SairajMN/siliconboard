@@ -7,6 +7,7 @@
 #
 #   bash deploy/deploy.sh                     # update and verify an existing box
 #   SKIP_STA=1 bash deploy/deploy.sh          # skip the ~17 min OpenSTA build
+#   KEYFILE=~/keys/box.pem bash deploy/deploy.sh   # when the key is not where we look
 #   bash deploy/deploy.sh --create            # make the instance first
 #   bash deploy/deploy.sh --dry-run           # show what it would do, change nothing
 set -euo pipefail
@@ -32,7 +33,18 @@ done
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-KEYFILE="${KEYFILE:-$HOME/.ssh/$NAME}"
+# The private half of the "$NAME" ec2 key pair. --create only emits a new key
+# when the pair is absent, so on an existing box the key already exists on disk
+# and we must find it: ~/sb-deploy is where this project keeps it (git-ignored).
+# An explicit KEYFILE=... always wins.
+KEYFILE="${KEYFILE:-}"
+if [ -z "$KEYFILE" ]; then
+    for candidate in "$HOME/sb-deploy/$NAME" "$HOME/.ssh/$NAME" \
+                     "$HOME/sb-deploy/$NAME.pem" "$HOME/.ssh/$NAME.pem"; do
+        if [ -f "$candidate" ]; then KEYFILE="$candidate"; break; fi
+    done
+fi
+KEYFILE="${KEYFILE:-$HOME/sb-deploy/$NAME}"
 say() { printf '\n== %s\n' "$*"; }
 aws_() { aws --profile "$PROFILE" --region "$REGION" "$@"; }
 run() { if [ "$DRY_RUN" = 1 ]; then echo "  would: $*"; else eval "$@"; fi; }
@@ -92,6 +104,17 @@ if [ "$DRY_RUN" = 0 ]; then
     else
         aws_ ec2 authorize-security-group-ingress --group-id "$SG" --protocol tcp --port 22 --cidr "$MYIP/32" >/dev/null
         echo "  allowed $MYIP/32"
+    fi
+fi
+
+if [ ! -f "$KEYFILE" ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "  note: no key at $KEYFILE (dry-run continues)"
+    else
+        echo "no private key at $KEYFILE" >&2
+        echo "point at the key behind the '$NAME' key pair:" >&2
+        echo "  KEYFILE=/path/to/key bash deploy/deploy.sh" >&2
+        exit 1
     fi
 fi
 

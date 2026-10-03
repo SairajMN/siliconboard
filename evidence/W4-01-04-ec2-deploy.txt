@@ -55,3 +55,51 @@ Two false alarms worth recording:
 Not closed: bedrock stays a no-op fallback. The ABSK keys authenticate against
 bedrock-runtime, but every third-party model answers "Operation not allowed"
 until it is enabled in the console for that account.
+
+---
+
+Addendum - repeatable deploy from the laptop. deploy/deploy.sh now does the whole
+thing over the aws cli in one command: it re-pins the SSH rule to the current
+client IP, waits for ssh, git-fetches and hard-resets /opt/siliconboard, installs
+.env to /etc/siliconboard/env 0600, runs setup.sh, then verifies.
+
+$ KEYFILE=~/sb-deploy/siliconboard SKIP_STA=1 bash deploy/deploy.sh
+== pin ssh to this ip
+  dropped stale 106.51.247.98/32
+  allowed 103.92.103.32/32
+== wait for ssh
+  up
+== sync the repo
+HEAD is now at adab683 fine
+== secrets and host setup
+  env installed 0600
+==> Setup completed successfully.
+== verify
+  service: active
+siliconboard/sta:1.0
+siliconboard/eda:1.0
+
+SKIP_STA=1 only skips *rebuilding* the sta image; the 2.02GB image built earlier
+is still there, so `docker run --rm siliconboard/sta:1.0 sta -version` -> 3.1.0
+and the timing stage still runs real OpenSTA, not the estimate.
+
+$ main.py doctor            (with /etc/siliconboard/env loaded)
+key gemini:1..4 + openai:1..3 + groq:1..4  -> 11 keys
+tool     Yosys 0.33 / Verilator 5.020 / Icarus Verilog 12.0
+doctor: ready
+
+$ main.py run --spec examples/counter/spec.txt --run-id live5 --cross-sim
+event [simulating] sim: checks=10 failed=0 verdict=True
+event [simulating] cross-check: icarus says True (verilator said True)
+event [synthesizing] synth: 28 cells
+event [analyzing_timing] timing: slack=3.34 ns target=200.0 MHz MET via OpenSTA
+event [done] report: 228 words
+status  done
+
+$ main.py waves --run-id live-waves --draw     (no viewer is installable)
+  clk toggling, rst_n, enable, count 0 -> 0xff, checks, failed 0
+
+The one gotcha: the ec2 key pair is named "siliconboard" and its private half
+lives in ~/sb-deploy/siliconboard (git-ignored), not ~/.ssh/siliconboard. A bare
+deploy.sh used to hang at the ssh wait because the default key did not exist;
+it now probes both locations and fails loudly when neither is present.
