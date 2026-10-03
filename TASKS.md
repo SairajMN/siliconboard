@@ -85,6 +85,7 @@ instead of retrying, so you can re-test with one command:
 | W4-10 | Debug loop re-verified on the shipped gemini chain | [x] | `runs/g31-inject`: FAIL(11 checks) -> one-line fix -> PASS, evidence/W4-10-debug-loop-on-gemini.txt |
 | W4-09 | Ponytail audit #2, README final, checks green | [x] | suite 6/6 exit 0, live run `w4-final` reached done (slack 3.34 ns MET, cross-sim agreed, 2 debt markers ledgered); evidence/W4-09-final-audit.txt, PONYTAIL-DEBT.md |
 | W4-11 | Web UI: live per-agent timeline, multi-format output, first-use help, history | [x] | `python tests/check_ui.py` in `run_all.py` (7 check files): timeline agrees with board (durations, agents, details), run-id/path validation rejects traversal; endpoints over loopback: 401 without token / 200 with, SSE streams stages, `deploy.sh` installs `siliconboard-ui.service` bound to 127.0.0.1 only (no SG change); evidence/W4-11-ui.txt |
+| W4-12 | UI password gate + public https hosting | [x] | `run_all.py` (7 files, 2 new checks: compare/lockout/sessions); live local + live through the tunnel: wrong 401 with tries-left, 5th strike 429, right password 429 while locked, cookie 200, old token 401 (no back door); box still listens 127.0.0.1:8080 only, SG still tcp/22 only, public url serves https with Google Trust Services cert; evidence/W4-12-ui-password-tunnel.txt |
 
 ## Findings — facts the tools taught us (each cost a real failure)
 

@@ -79,14 +79,32 @@ over ssh — the web UI.
 ### Web UI
 
 The server (`ui/server.py`, stdlib only) binds **127.0.0.1:8080 and nothing
-else**, so the way in is the ssh key you already have. No public port, no new
-security-group rule, no certificate; the token requirement still applies on
-loopback so no other account on the box can drive it.
+else**. Two credentials, never both at once:
+
+- **no `SB_UI_PASSWORD`** — the shared token in the printed URL (local dev)
+- **`SB_UI_PASSWORD` set** — only the password, via `POST /api/login`:
+  constant-time compare, five wrong tries lock the gate for a minute, and the
+  token stops working entirely. The session is an `HttpOnly; SameSite=Strict`
+  cookie; the password never appears in a URL or in storage.
+
+There are two ways to reach that loopback port:
 
 ```bash
-bash ui/tunnel.sh              # laptop: opens the tunnel, prints the tokenised url
+bash ui/tunnel.sh              # laptop: ssh tunnel, prints the local url
 bash ui/tunnel.sh --phone      # also reachable from a phone/tablet on your Wi-Fi
 ```
+
+or, for a link anyone can open, the public door — an **outbound Cloudflare
+quick tunnel** that `deploy/deploy.sh` installs and health-checks:
+
+```bash
+UI_PASSWORD='...' bash deploy/deploy.sh     # set/rotate the password + publish
+```
+
+It gives you an `https://….trycloudflare.com` URL while the box still listens
+on **127.0.0.1 only**: no inbound port, no security-group rule (still just
+`tcp/22` from your IP), TLS terminated at the edge. The password is the whole
+security boundary — anyone with the URL but not the password gets `401`.
 
 What it gives you:
 
@@ -100,7 +118,8 @@ What it gives you:
 - **history** — every run paired with the input that produced it
 
 `deploy/deploy.sh` installs and health-checks the `siliconboard-ui` unit
-(loopback only). Keys never reach the browser.
+(loopback only) plus the `siliconboard-tunnel` unit when publishing. Keys
+never reach the browser.
 
 ### Terminal
 

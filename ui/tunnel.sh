@@ -38,7 +38,9 @@ case "$HOST" in ""|None) echo "no running $NAME box; run deploy/deploy.sh first"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15 -i "$KEYFILE")
 
-# the ui prints its tokenised url at startup; read it straight from the journal
+# the ui prints its tokenised url at startup; read it straight from the journal.
+# With SB_UI_PASSWORD set the banner says "(password required)" instead - there
+# is no token to carry, so the tunnel only carries the bytes.
 TOKEN_URL="$(ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" \
     "sudo journalctl -u siliconboard-ui --no-pager 2>/dev/null | grep -o 'http://127.0.0.1:[0-9]*/?t=[A-Za-z0-9_-]*' | tail -1" \
     2>/dev/null || true)"
@@ -51,9 +53,9 @@ if [ "$PHONE" = 1 ]; then
     BIND="0.0.0.0"
     LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
     if [ -n "$LAN_IP" ]; then
-        echo "phone/tablet on this Wi-Fi: http://$LAN_IP:$PORT/?t=<token>"
+        echo "phone/tablet on this Wi-Fi: http://$LAN_IP:$PORT/  (token or password, as configured)"
     else
-        echo "no lan ip found; use http://<this-machine-ip>:$PORT/?t=<token>"
+        echo "no lan ip found; use http://<this-machine-ip>:$PORT/"
     fi
 fi
 
@@ -61,7 +63,8 @@ echo "tunnel: local :$PORT -> box loopback (ctrl-c stops; the box never opens a 
 if [ -n "$OPEN_URL" ]; then
     echo "open:    $OPEN_URL"
 else
-    echo "open:    http://localhost:$PORT/  (token url: ssh sudo journalctl -u siliconboard-ui)"
+    echo "open:    http://localhost:$PORT/  (enter the password, or read the token url:"
+    echo "         ssh sudo journalctl -u siliconboard-ui)"
 fi
 
 exec ssh "${SSH_OPTS[@]}" -N -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
