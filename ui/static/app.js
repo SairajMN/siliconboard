@@ -8,6 +8,8 @@
   const params = new URLSearchParams(location.search);
   let TOKEN = params.get("t") || sessionStorage.getItem("sb-token") || "";
   if (params.get("t")) sessionStorage.setItem("sb-token", params.get("t"));
+  let MODE = "token";     // learned from /api/auth: "password" or "token"
+  let AUTHED = !!TOKEN;   // a token counts until the server says otherwise
 
   const state = { runId: null, stream: null, timeline: null, tab: "report" };
 
@@ -16,19 +18,64 @@
     if (TOKEN) url.searchParams.set("t", TOKEN);
     return fetch(url, options).then(async (res) => {
       const body = await res.json().catch(() => ({}));
-      if (res.status === 401) { unlock(); throw new Error("token required"); }
+      if (res.status === 401) { unlock(body); throw new Error("auth required"); }
       if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
       return body;
     });
   }
 
-  /* Show the token prompt. Any 401 lands here, so a stale or missing token is
-     recoverable in place instead of a page of red console errors. */
-  function unlock() {
+  /* Show the gate the server actually enforces: a password box when one is
+     configured, the token box otherwise. Any 401 lands here, so a stale
+     session or token is recoverable in place. */
+  function unlock(body) {
+    if (body && body.auth) MODE = body.auth;
+    const password = MODE === "password";
+    $("#toklabel").textContent = password ? "Password" : "Access token";
+    $("#toknote").innerHTML = password
+      ? "This instance is password-protected. Type the password to open it."
+      : 'The server printed <code>http://…/?t=…</code> — paste the part after <code>?t=</code> (or reopen that exact URL).';
+    $("#tokin").type = password ? "password" : "text";
+    $("#tokin").placeholder = password ? "enter the password" : "paste the token";
+    $("#tokin").autocomplete = password ? "current-password" : "off";
     $("#tok").hidden = false;
-    $("#hint").textContent = "Locked — paste the access token below.";
+    $("#hint").textContent = password ? "Locked — enter the password."
+                                       : "Locked — paste the access token below.";
     $("#hint").className = "hint warn";
     $("#tokin").focus();
+  }
+
+  function submitUnlock() {
+    const value = $("#tokin").value;
+    if (!value) return;
+    if (MODE === "password") {
+      fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: value }),
+      }).then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          $("#hint").textContent = body.error || "login failed";
+          $("#hint").className = "hint warn";
+          return;
+        }
+        $("#tokin").value = "";          // the session lives in a cookie now
+        AUTHED = true;
+        $("#tok").hidden = true;
+        setHint("Unlocked. Runs on the box. Leaves runs/<id>/board.json and a report.", false);
+        loadSystem(); loadExamples(); loadRuns();
+      }).catch(() => {
+        $("#hint").textContent = "login failed: network error";
+        $("#hint").className = "hint warn";
+      });
+      return;
+    }
+    TOKEN = value;
+    sessionStorage.setItem("sb-token", value);
+    AUTHED = true;
+    $("#tok").hidden = true;
+    setHint("Token saved. Runs on the box. Leaves runs/<id>/board.json and a report.", false);
+    loadSystem(); loadExamples(); loadRuns();
   }
 
   const fileUrl = (runId, path) =>
@@ -61,19 +108,10 @@
 
   /* ------------------------------------------------------------------ boot */
   function boot() {
-    $("#tok-btn").addEventListener("click", () => {
-      const value = $("#tokin").value.trim();
-      if (!value) return;
-      TOKEN = value;
-      sessionStorage.setItem("sb-token", value);
-      $("#tok").hidden = true;
-      $("#hint").textContent = "Token saved. Runs on the box. Leaves runs/<id>/board.json and a report.";
-      $("#hint").className = "hint";
-      loadSystem(); loadExamples(); loadRuns();
+    $("#tok-btn").addEventListener("click", submitUnlock);
+    $("#tokin").addEventListener("keydown", (event) => {
+      if (event.key === "Enter") submitUnlock();
     });
-    if (!TOKEN) {
-      unlock();
-    }
     if (!localStorage.getItem("sb-seen")) {
       $("#overlay").hidden = false;
     }
@@ -95,11 +133,24 @@
     });
     $("#run-btn").addEventListener("click", startRun);
     $("#refresh").addEventListener("click", () => state.runId && openRun(state.runId));
-    if (TOKEN) {          // no token: the prompt is up, don't fire 401s at the console
-      loadSystem();
-      loadExamples();
-      loadRuns();
-    }
+    // one public call decides everything: which gate the server enforces and
+    // whether this browser already holds a session behind it
+    fetch("/api/auth").then((res) => res.json()).then((info) => {
+      MODE = info.mode === "password" ? "password" : "token";
+      if (info.session || (MODE === "token" && TOKEN)) {
+        AUTHED = true;
+        loadSystem(); loadExamples(); loadRuns();
+      } else {
+        unlock();
+      }
+    }).catch(() => {
+      if (TOKEN) {
+        AUTHED = true;
+        loadSystem(); loadExamples(); loadRuns();
+      } else {
+        unlock();
+      }
+    });
   }
 
   function loadSystem() {
@@ -198,7 +249,9 @@
   }
 
   function startRun() {
-    if (!TOKEN) return setHint("No token: reopen the URL the server printed.", true);
+    if (!AUTHED) return setHint(MODE === "password"
+      ? "Locked — enter the password first."
+      : "No token: reopen the URL the server printed.", true);
     const request = $("#req").value.trim();
     const runId = ($("#runid").value.trim() || "ui-" + Date.now().toString(36));
     if (!request) return setHint("Write what the block should do first.", true);
@@ -224,7 +277,7 @@
     paintRail();
     if (state.stream) state.stream.close();
     loadOnce(runId);
-    if (TOKEN) {
+    if (AUTHED) {
       const stream = new EventSource(
         `/api/stream?run=${encodeURIComponent(runId)}&t=${encodeURIComponent(TOKEN)}`);
       state.stream = stream;

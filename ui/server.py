@@ -3,18 +3,26 @@
 Deliberately stdlib-only. The project runs on two dependencies and no build step,
 so the UI is a ThreadingHTTPServer plus one static page, not a framework.
 
-It binds 127.0.0.1 and nothing else. Reaching it means an ssh tunnel, which is
-the whole security story: no new public port, no certificate to rotate, and the
-only credential involved is the ssh key the box already trusts. Even on loopback
-a shared token is required, so another account on the box cannot drive it.
+It binds 127.0.0.1 and nothing else. The public door, when there is one, is an
+outbound Cloudflare quick tunnel to that loopback port (deploy/deploy.sh runs the
+unit): zero inbound ports, zero security-group rules, https at the edge.
 
-    python ui/server.py                 # prints a URL containing the token
+What the API accepts depends on SB_UI_PASSWORD:
+
+  * unset -> the shared token in the printed URL (local dev, ssh tunnel)
+  * set   -> only a session from POST /api/login: constant-time compare,
+    five-strike lockout, HttpOnly SameSite=Strict cookie. The token is refused
+    entirely, so the password really is the only way in.
+
+    python ui/server.py                        # token in the printed URL
+    SB_UI_PASSWORD=... python ui/server.py     # password gate instead
     python ui/server.py --port 8080 --expose   # opt-in; binds all interfaces
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import mimetypes
 import os
@@ -25,6 +33,7 @@ import socketserver
 import subprocess
 import sys
 import time
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -43,6 +52,78 @@ GOLDEN = ROOT / "demo" / "golden"
 
 RUN_ID = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 TOKEN = os.environ.get("SB_UI_TOKEN") or secrets.token_urlsafe(18)
+
+# Password gate. When configured it *replaces* the token; sessions live in
+# memory and die with the process, so a restart logs everyone out.
+PASSWORD = os.environ.get("SB_UI_PASSWORD", "")
+SESSION_COOKIE = "sb_session"
+SESSION_TTL = 12 * 3600
+SESSIONS: dict[str, float] = {}
+LOGIN = {"fails": 0, "locked_until": 0.0}
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK = 60
+
+
+def check_password(given: str) -> bool:
+    """Constant-time compare. Five wrong strikes lock the gate for a minute."""
+    if not PASSWORD or login_locked():
+        return False
+    ok = hmac.compare_digest(given.encode(), PASSWORD.encode())
+    if ok:
+        LOGIN["fails"] = 0
+        return True
+    LOGIN["fails"] += 1
+    if LOGIN["fails"] >= LOGIN_MAX_FAILS:
+        LOGIN["locked_until"] = time.time() + LOGIN_LOCK
+    return False
+
+
+def login_locked() -> bool:
+    if LOGIN["locked_until"] and time.time() >= LOGIN["locked_until"]:
+        LOGIN["fails"] = 0            # the lock was served; strikes start fresh
+        LOGIN["locked_until"] = 0.0
+    return time.time() < LOGIN["locked_until"]
+
+
+def issue_session() -> str:
+    now = time.time()
+    for sid, exp in list(SESSIONS.items()):
+        if exp < now:
+            del SESSIONS[sid]
+    sid = secrets.token_urlsafe(24)
+    SESSIONS[sid] = now + SESSION_TTL
+    return sid
+
+
+def session_valid(sid: str) -> bool:
+    if not sid:
+        return False
+    exp = SESSIONS.get(sid)
+    return bool(exp and exp > time.time())
+
+
+def session_from_cookie(header: str | None) -> str:
+    if not header:
+        return ""
+    jar = SimpleCookie()
+    try:
+        jar.load(header)
+    except Exception:
+        return ""
+    morsel = jar.get(SESSION_COOKIE)
+    return morsel.value if morsel else ""
+
+
+def auth_payload(has_session: bool) -> dict:
+    """Everything the page needs to choose its prompt; leaks nothing else."""
+    return {"mode": "password" if PASSWORD else "token", "session": has_session}
+
+
+def denied_payload() -> dict:
+    if PASSWORD:
+        return {"error": "password required", "auth": "password"}
+    return {"error": "missing or wrong token: reopen the URL the server printed",
+            "auth": "token"}
 
 # a run id is a directory name we build paths from, so it is validated, not trusted
 def valid_run_id(run_id: str) -> bool:
@@ -268,6 +349,9 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": message}, code)
 
     def _authorized(self, query: dict) -> bool:
+        if PASSWORD:
+            # password configured: the token is not a back door, cookie only
+            return session_valid(session_from_cookie(self.headers.get("Cookie")))
         given = (query.get("t") or [self.headers.get("X-SB-Token") or ""])[0]
         return secrets.compare_digest(str(given), TOKEN)
 
@@ -345,8 +429,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if not path.startswith("/api/"):
             return self._error(404, "not found")
+        if path == "/api/auth":
+            sid = session_from_cookie(self.headers.get("Cookie"))
+            return self._json(auth_payload(session_valid(sid)))
         if not self._authorized(query):
-            return self._error(401, "missing or wrong token: reopen the URL the server printed")
+            return self._json(denied_payload(), 401)
 
         if path == "/api/system":
             return self._json(system_info())
@@ -375,17 +462,43 @@ class Handler(BaseHTTPRequestHandler):
                 return self._artifact(run_id, query)
         return self._error(404, "not found")
 
+    def _login(self, body: dict) -> None:
+        """Issue the session cookie. The password travels in the body, never a query."""
+        if not PASSWORD:
+            return self._error(400, "no password configured")
+        if login_locked():
+            return self._json({"error": f"too many attempts; wait {LOGIN_LOCK} seconds"}, 429)
+        if not check_password(str(body.get("password") or "")):
+            if login_locked():
+                return self._json({"error": f"too many attempts; wait {LOGIN_LOCK} seconds"}, 429)
+            left = LOGIN_MAX_FAILS - LOGIN["fails"]
+            return self._json({"error": f"wrong password ({left} tries left)"}, 401)
+        sid = issue_session()
+        secure = "; Secure" if (self.headers.get("X-Forwarded-Proto") or "").lower() == "https" else ""
+        payload = json.dumps({"ok": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Set-Cookie",
+                         f"{SESSION_COOKIE}={sid}; Path=/; HttpOnly; SameSite=Strict; "
+                         f"Max-Age={SESSION_TTL}{secure}")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
-        if not self._authorized(query):
-            return self._error(401, "missing or wrong token")
-
         length = int(self.headers.get("Content-Length") or 0)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return self._error(400, "body must be JSON")
+
+        if parsed.path == "/api/login":
+            return self._login(body)
+        if not self._authorized(query):
+            return self._json(denied_payload(), 401)
 
         if parsed.path == "/api/run":
             code, message = start_run(
@@ -411,7 +524,10 @@ def main(argv: list[str] | None = None) -> int:
     host = "0.0.0.0" if args.expose else args.host
     shown = "127.0.0.1" if args.expose else host
     server = Server((host, args.port), Handler)
-    print(f"siliconboard ui on http://{shown}:{args.port}/?t={TOKEN}", flush=True)
+    if PASSWORD:
+        print(f"siliconboard ui on http://{shown}:{args.port}/ (password required)", flush=True)
+    else:
+        print(f"siliconboard ui on http://{shown}:{args.port}/?t={TOKEN}", flush=True)
     if args.expose:
         print("  --expose: reachable from other hosts; keep the token and pin the security group")
     else:

@@ -34,11 +34,11 @@
   <main class="main">
     <section class="compose">
       <div class="tok" id="tok" hidden>
-        <label for="tokin">Access token</label>
-        <p class="tok-note">The server printed <code>http://…/?t=…</code> — paste the
+        <label for="tokin" id="toklabel">Access token</label>
+        <p class="tok-note" id="toknote">The server printed <code>http://…/?t=…</code> — paste the
           part after <code>?t=</code> (or reopen that exact URL).</p>
         <div class="go">
-          <input id="tokin" placeholder="paste the token" autocomplete="off" spellcheck="false">
+          <input id="tokin" type="text" placeholder="paste the token" autocomplete="off" spellcheck="false">
           <button class="primary" id="tok-btn" type="button">Unlock</button>
         </div>
       </div>
