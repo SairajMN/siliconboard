@@ -13,12 +13,22 @@
 
   function api(path, options = {}) {
     const url = new URL(path, location.origin);
-    url.searchParams.set("t", TOKEN);
+    if (TOKEN) url.searchParams.set("t", TOKEN);
     return fetch(url, options).then(async (res) => {
       const body = await res.json().catch(() => ({}));
+      if (res.status === 401) { unlock(); throw new Error("token required"); }
       if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`);
       return body;
     });
+  }
+
+  /* Show the token prompt. Any 401 lands here, so a stale or missing token is
+     recoverable in place instead of a page of red console errors. */
+  function unlock() {
+    $("#tok").hidden = false;
+    $("#hint").textContent = "Locked — paste the access token below.";
+    $("#hint").className = "hint warn";
+    $("#tokin").focus();
   }
 
   const fileUrl = (runId, path) =>
@@ -51,9 +61,18 @@
 
   /* ------------------------------------------------------------------ boot */
   function boot() {
+    $("#tok-btn").addEventListener("click", () => {
+      const value = $("#tokin").value.trim();
+      if (!value) return;
+      TOKEN = value;
+      sessionStorage.setItem("sb-token", value);
+      $("#tok").hidden = true;
+      $("#hint").textContent = "Token saved. Runs on the box. Leaves runs/<id>/board.json and a report.";
+      $("#hint").className = "hint";
+      loadSystem(); loadExamples(); loadRuns();
+    });
     if (!TOKEN) {
-      $("#hint").textContent = "Open the URL the server printed (it contains ?t=…).";
-      $("#hint").className = "hint warn";
+      unlock();
     }
     if (!localStorage.getItem("sb-seen")) {
       $("#overlay").hidden = false;
@@ -76,9 +95,11 @@
     });
     $("#run-btn").addEventListener("click", startRun);
     $("#refresh").addEventListener("click", () => state.runId && openRun(state.runId));
-    loadSystem();
-    loadExamples();
-    loadRuns();
+    if (TOKEN) {          // no token: the prompt is up, don't fire 401s at the console
+      loadSystem();
+      loadExamples();
+      loadRuns();
+    }
   }
 
   function loadSystem() {

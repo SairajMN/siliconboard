@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>siliconboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2316181d'/%3E%3Ctext x='16' y='22' font-family='monospace' font-size='15' font-weight='600' fill='%23fbfbfa' text-anchor='middle'%3ESB%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -32,6 +33,16 @@
 
   <main class="main">
     <section class="compose">
+      <div class="tok" id="tok" hidden>
+        <label for="tokin">Access token</label>
+        <p class="tok-note">The server printed <code>http://…/?t=…</code> — paste the
+          part after <code>?t=</code> (or reopen that exact URL).</p>
+        <div class="go">
+          <input id="tokin" placeholder="paste the token" autocomplete="off" spellcheck="false">
+          <button class="primary" id="tok-btn" type="button">Unlock</button>
+        </div>
+      </div>
+
       <label for="req">Describe the block</label>
       <textarea id="req" rows="6" spellcheck="false"
         placeholder="A 4-bit up counter with synchronous active-low reset and an enable. Saturates at 1111. Target 200 MHz."></textarea>
