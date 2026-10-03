@@ -67,12 +67,44 @@ asserts that a cell count parses.
 | `evidence/` | raw output of each verified task |
 | `demo/` | the 5-minute script and the golden run snapshots it replays |
 | `deploy/` | one-command laptop deploy (`deploy.sh`), server bootstrap, systemd unit, compose file |
+| `ui/` | web UI: per-agent timeline renderer, stdlib HTTP server, one static page, ssh tunnel helper |
 | `TASKS.md` | the ledger: every task, its verify command, its evidence file |
 | `PONYTAIL-DEBT.md` | every shortcut still in the tree, with the trigger that retires it |
 
 ## Seeing the design
 
-There is no web UI. A run is three things you can open: the report, the board,
+A run is four things you can open: the report, the board, a VCD waveform, and —
+over ssh — the web UI.
+
+### Web UI
+
+The server (`ui/server.py`, stdlib only) binds **127.0.0.1:8080 and nothing
+else**, so the way in is the ssh key you already have. No public port, no new
+security-group rule, no certificate; the token requirement still applies on
+loopback so no other account on the box can drive it.
+
+```bash
+bash ui/tunnel.sh              # laptop: opens the tunnel, prints the tokenised url
+bash ui/tunnel.sh --phone      # also reachable from a phone/tablet on your Wi-Fi
+```
+
+What it gives you:
+
+- **live workflow** — which agent is working right now, how long each agent
+  took, what it produced (module, ports, checks, cells, slack), streamed from
+  `board.json` as the run writes it
+- **first-use instructions** on the page, suggested specs you can click, and a
+  golden run you can browse before spending a cent on tokens
+- **output in multiple formats** — report.md, board.json, syntax-highlighted
+  Verilog, ASCII waveform, tool logs — all read from the run's own artifacts
+- **history** — every run paired with the input that produced it
+
+`deploy/deploy.sh` installs and health-checks the `siliconboard-ui` unit
+(loopback only). Keys never reach the browser.
+
+### Terminal
+
+A run is also three files you can open without any UI: the report, the board,
 and — with `--waves` — a VCD waveform.
 
 ```bash

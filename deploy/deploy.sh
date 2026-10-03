@@ -156,6 +156,24 @@ if [ "$DRY_RUN" = 0 ]; then
     ssh_ "SKIP_STA=$SKIP_STA sudo -E bash /opt/siliconboard/deploy/setup.sh" || echo "  setup.sh complained, see above"
 fi
 
+say "web ui"
+if [ "$DRY_RUN" = 0 ]; then
+    # loopback only: no security-group change, the tunnel is the way in
+    ssh_ 'set -e
+        sudo install -m 644 -o root -g root /opt/siliconboard/deploy/ui.service /etc/systemd/system/siliconboard-ui.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now siliconboard-ui.service >/dev/null 2>&1 || true
+        sudo systemctl restart siliconboard-ui.service
+        sleep 2
+        echo "  ui service: $(systemctl is-active siliconboard-ui.service)"
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 http://127.0.0.1:8080/api/system || true)
+        echo "  ui loopback http: ${code:-down} (401 = up, token required)"'
+    UI_URL="$(ssh_ "sudo journalctl -u siliconboard-ui --no-pager 2>/dev/null | grep -o 'http://127.0.0.1:[0-9]*/?t=[A-Za-z0-9_-]*' | tail -1" || true)"
+    [ -n "$UI_URL" ] && echo "  ui url (after tunnel): ${UI_URL/127.0.0.1/localhost}"
+else
+    echo "  would: install + enable siliconboard-ui.service (loopback :8080)"
+fi
+
 say "verify"
 if [ "$DRY_RUN" = 0 ]; then
     ssh_ "echo \"  service: \$(systemctl is-active siliconboard)\"; sudo docker images --format '    {{.Repository}}:{{.Tag}}' | grep siliconboard || echo '    (no images built yet)'; echo '  recent runs:'; ls /opt/siliconboard/runs 2>/dev/null | tail -3 | sed 's/^/    /' || true"
@@ -165,3 +183,5 @@ echo
 printf 'done\n'
 printf '  ssh -i %s ubuntu@%s\n' "$KEYFILE" "$HOST"
 printf "  then: cd /opt/siliconboard && .venv/bin/python main.py run --spec examples/counter/spec.txt --run-id live1\n"
+printf '  ui:   bash ui/tunnel.sh          # opens the tunnel and prints the url\n'
+printf '        bash ui/tunnel.sh --phone  # same, reachable from a phone on your Wi-Fi\n'

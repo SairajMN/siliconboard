@@ -1,0 +1,23 @@
+[Unit]
+Description=SiliconBoard web UI (loopback only; reach it over an ssh tunnel)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/siliconboard
+EnvironmentFile=/etc/siliconboard/env
+ExecStart=/opt/siliconboard/.venv/bin/python ui/server.py --port 8080
+Restart=on-failure
+RestartSec=3
+
+# The UI serves loopback by design: no new public port, no new inbound rule.
+#   laptop:  ssh -L 8080:127.0.0.1:8080 -i <key> ubuntu@<box>  then open http://localhost:8080
+#   phone:   ssh -L 0.0.0.0:8080:127.0.0.1:8080 ...           then open http://<laptop-ip>:8080
+# The startup banner prints the tokenised URL; share that URL, not just the port.
+
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
