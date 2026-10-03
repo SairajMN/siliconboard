@@ -155,10 +155,12 @@ if [ "$DRY_RUN" = 0 ]; then
     fi
     # The UI mints a random token per start, which rotates it on every deploy and
     # breaks open tabs. Persist one token instead: keep it if present, else create.
+    # 128 bytes in -> tr strips to alnum -> keep 24 (32 bytes of urandom only
+    # yields ~8 alnum chars, which is weaker than it looks).
     ssh_ 'if sudo grep -q "^SB_UI_TOKEN=" /etc/siliconboard/env 2>/dev/null; then
               echo "  ui token: kept"
           else
-              tok=$(head -c 32 /dev/urandom | tr -dc "A-Za-z0-9" | head -c 24)
+              tok=$(head -c 128 /dev/urandom | tr -dc "A-Za-z0-9" | head -c 24)
               echo "SB_UI_TOKEN=$tok" | sudo tee -a /etc/siliconboard/env >/dev/null
               echo "  ui token: created (survives restarts)"
           fi'
