@@ -1,0 +1,17 @@
+[Unit]
+Description=Cloudflare quick tunnel to the siliconboard UI (loopback :8080)
+# The UI binds 127.0.0.1 only. This tunnel dials OUT to the Cloudflare edge and
+# publishes that loopback port over https - no inbound port, no SG rule, and the
+# browser->edge leg is encrypted with a real certificate. The password gate in
+# ui/server.py is what actually protects the data.
+After=network-online.target siliconboard-ui.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

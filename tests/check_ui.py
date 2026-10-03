@@ -194,6 +194,58 @@ def check_start_run_validation() -> None:
     assert not (server.RUNS / "valid-id").exists(), "validation wrote a directory"
 
 
+def check_password_gate() -> None:
+    """Password configured: it replaces the token, lockout holds, sessions expire."""
+    original = server.PASSWORD
+    try:
+        server.PASSWORD = "thisisthepass@344##d"
+        server.LOGIN.update(fails=0, locked_until=0.0)
+
+        assert server.check_password("thisisthepass@344##d") is True
+        assert server.check_password("wrong-pass") is False
+        assert server.check_password("thisisthepass@344##d ") is False  # exact, no trim
+
+        # five strikes lock the gate, and the right password stays out while locked
+        for _ in range(server.LOGIN_MAX_FAILS - 1):
+            assert server.check_password("wrong-pass") is False
+        assert server.login_locked() is True
+        assert server.check_password("thisisthepass@344##d") is False
+
+        # the page is told which gate to show, nothing more
+        assert server.auth_payload(False) == {"mode": "password", "session": False}
+        assert server.auth_payload(True) == {"mode": "password", "session": True}
+        assert server.denied_payload() == {"error": "password required", "auth": "password"}
+    finally:
+        server.PASSWORD = original
+        server.LOGIN.update(fails=0, locked_until=0.0)
+
+
+def check_sessions() -> None:
+    """Sessions are issued, parsed back from a cookie, and expire."""
+    sid = server.issue_session()
+    assert server.session_valid(sid)
+    assert not server.session_valid("forged-session-id")
+    assert not server.session_valid("")
+
+    assert server.session_from_cookie(f"{server.SESSION_COOKIE}={sid}") == sid
+    assert server.session_from_cookie("other=1") == ""
+    assert server.session_from_cookie("") == ""
+    assert server.session_from_cookie(None) == ""
+
+    server.SESSIONS[sid] = server.SESSIONS[sid] - server.SESSION_TTL - 1  # age it out
+    assert server.session_valid(sid) is False
+    server.SESSIONS.pop(sid, None)
+
+    # token mode must not advertise a password gate
+    original = server.PASSWORD
+    try:
+        server.PASSWORD = ""
+        assert server.auth_payload(False) == {"mode": "token", "session": False}
+        assert server.check_password("anything") is False, "no password configured never opens"
+    finally:
+        server.PASSWORD = original
+
+
 def check_examples_index() -> None:
     examples = server.examples_index()
     assert examples, "examples/ has no spec.txt to suggest"
@@ -209,6 +261,8 @@ def main() -> None:
     check_run_id_validation()
     check_artifacts_and_history()
     check_start_run_validation()
+    check_password_gate()
+    check_sessions()
     check_examples_index()
     print("check_ui: ok")
 

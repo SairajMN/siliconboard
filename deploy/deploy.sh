@@ -164,6 +164,19 @@ if [ "$DRY_RUN" = 0 ]; then
               echo "SB_UI_TOKEN=$tok" | sudo tee -a /etc/siliconboard/env >/dev/null
               echo "  ui token: created (survives restarts)"
           fi'
+    # Password gate: UI_PASSWORD=... bash deploy/deploy.sh sets or rotates it.
+    # When set, ui/server.py refuses the token entirely - the password is the
+    # only way in. Value is kept out of argv logs by passing it on stdin.
+    if [ -n "${UI_PASSWORD:-}" ]; then
+        printf '%s
+' "$UI_PASSWORD" | ssh_ 'read -r pw; sudo sed -i \
+            -e "/^SB_UI_PASSWORD=/d" /etc/siliconboard/env; \
+            printf "SB_UI_PASSWORD=%s\n" "$pw" | sudo tee -a /etc/siliconboard/env >/dev/null; \
+            echo "  ui password: set"'
+    else
+        ssh_ 'sudo grep -q "^SB_UI_PASSWORD=" /etc/siliconboard/env 2>/dev/null \
+            && echo "  ui password: set" || echo "  ui password: not set (UI_PASSWORD=... to enable)"'
+    fi
     ssh_ "SKIP_STA=$SKIP_STA sudo -E bash /opt/siliconboard/deploy/setup.sh" || echo "  setup.sh complained, see above"
 fi
 
@@ -183,6 +196,39 @@ if [ "$DRY_RUN" = 0 ]; then
     [ -n "$UI_URL" ] && echo "  ui url (after tunnel): ${UI_URL/127.0.0.1/localhost}"
 else
     echo "  would: install + enable siliconboard-ui.service (loopback :8080)"
+fi
+
+# Public door: an OUTBOUND Cloudflare quick tunnel to the loopback UI. The box
+# still listens on 127.0.0.1 only - no inbound port, no security-group rule,
+# https at the edge. The password gate (UI_PASSWORD) is what protects the data.
+say "public tunnel (https, no open ports)"
+if [ "$DRY_RUN" = 0 ]; then
+    ssh_ 'set -e
+        if ! command -v cloudflared >/dev/null 2>&1; then
+            curl -fsSL -o /tmp/cloudflared.deb \
+                https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+            sudo dpkg -i /tmp/cloudflared.deb >/dev/null && rm -f /tmp/cloudflared.deb
+            echo "  cloudflared: installed"
+        else
+            echo "  cloudflared: present ($(cloudflared --version 2>/dev/null | head -1))"
+        fi
+        sudo install -m 644 -o root -g root /opt/siliconboard/deploy/cloudflared.service /etc/systemd/system/siliconboard-tunnel.service
+        sudo systemctl daemon-reload
+        sudo systemctl enable --now siliconboard-tunnel.service >/dev/null 2>&1 || true
+        sudo systemctl restart siliconboard-tunnel.service
+        sleep 6
+        echo "  tunnel: $(systemctl is-active siliconboard-tunnel.service)"'
+    PUBLIC_URL="$(ssh_ "sudo journalctl -u siliconboard-tunnel --no-pager -n 50 2>/dev/null | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1" || true)"
+    if [ -n "$PUBLIC_URL" ]; then
+        echo "  public url: $PUBLIC_URL"
+        # the edge must answer, and the gate must be closed in front of it
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$PUBLIC_URL/api/auth" || true)
+        echo "  edge check: /api/auth -> ${code:-down} (200 = the tunnel is up)"
+    else
+        echo "  public url: not in the journal yet (journalctl -u siliconboard-tunnel)"
+    fi
+else
+    echo "  would: install cloudflared + siliconboard-tunnel.service (outbound https)"
 fi
 
 say "verify"
