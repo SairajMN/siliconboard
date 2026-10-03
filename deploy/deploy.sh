@@ -153,6 +153,15 @@ if [ "$DRY_RUN" = 0 ]; then
     else
         echo "  no local .env, leaving the box copy alone"
     fi
+    # The UI mints a random token per start, which rotates it on every deploy and
+    # breaks open tabs. Persist one token instead: keep it if present, else create.
+    ssh_ 'if sudo grep -q "^SB_UI_TOKEN=" /etc/siliconboard/env 2>/dev/null; then
+              echo "  ui token: kept"
+          else
+              tok=$(head -c 32 /dev/urandom | tr -dc "A-Za-z0-9" | head -c 24)
+              echo "SB_UI_TOKEN=$tok" | sudo tee -a /etc/siliconboard/env >/dev/null
+              echo "  ui token: created (survives restarts)"
+          fi'
     ssh_ "SKIP_STA=$SKIP_STA sudo -E bash /opt/siliconboard/deploy/setup.sh" || echo "  setup.sh complained, see above"
 fi
 
