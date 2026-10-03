@@ -1,0 +1,105 @@
+W4-11 Web UI — live agent timeline, multi-format output, history
+=================================================================
+Commit: 1baad80 (plus tunnel port fix, see below)
+Box: i-0814c75a61a9c37c4 / 15.252.184.169, ui bound 127.0.0.1:8080 only
+
+1. Static suite
+---------------
+$ .venv/bin/python tests/run_all.py
+... check_ui: ok
+7 check files passed
+
+check_ui.py (new): timeline agrees with a synthetic board — stage order,
+exact durations (spec 3s, rtl 12s, tb→sim 14s, timing→report 5s), agent
+names, details read off the board (module/target/cells/slack), llm call
+attribution; running stage carries seconds until `now`, queued stages in
+execution order; failed run marks its last stage failed; run-id validation
+rejects `../etc/passwd`, spaces, 41-char ids; artifact listing rejects
+path traversal; start_run validation writes nothing to disk.
+
+2. deploy.sh installs and health-checks the unit (no SG change)
+---------------------------------------------------------------
+$ SKIP_STA=1 bash deploy/deploy.sh
+== web ui
+  ui service: active
+  ui loopback http: 401 (401 = up, token required)
+  ui url (after tunnel): http://localhost:8080/?t=m2d2qejHO7Sn7kAif9E6dZRF
+
+$ aws ec2 describe-security-group-rules ... (inbound)
+22	103.92.103.32/32          <- the only inbound rule; no new public port
+
+$ ssh ubuntu@15.252.184.169 'sudo ss -ltnp | grep 8080'
+LISTEN 0 5 127.0.0.1:8080 0.0.0.0:* users:(("python",pid=59292,fd=3))
+$ ssh ... 'cd /opt/siliconboard && git log --oneline -1'
+1baad80 web ui: live agent timeline, multi-format output, history - loopback only
+$ ssh ... 'systemctl is-active siliconboard-ui siliconboard'
+active
+active
+
+3. Auth over the tunnel
+-----------------------
+$ ssh -i ~/sb-deploy/siliconboard -f -N -L 8080:127.0.0.1:8080 ubuntu@15.252.184.169
+$ curl -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/
+200
+$ curl ... http://127.0.0.1:8080/api/runs            (no token)
+401
+$ curl ... 'http://127.0.0.1:8080/api/runs?t=m2d2…'
+200   -> box runs: ['live5', 'live-waves', 'live4', 'live3', 'live2', 'live1']
+
+4. Live per-agent timeline (a real box run, read through the tunnel)
+--------------------------------------------------------------------
+$ curl ... /api/runs/live5?t=…
+stages: spec 4s, rtl 6s, lint 1s, tb 43s, sim 11s, synth 1s, timing 6s,
+        report 6s — every row carries its agent name and details
+summary: module counter_8bit_saturating, sim_passed True, checks 10,
+         cross_agreed True, cells 28, slack 3.34 ns, met_target True,
+         llm_calls 5, tokens 10690
+
+5. A run STARTED through the UI (POST /api/run) completed end-to-end
+--------------------------------------------------------------------
+$ curl -X POST -d '{"run_id":"ui-live1","request":"8-bit up counter ...",
+                    "cross_sim":true}' .../api/runs/../api/run
+{"run_id": "ui-live1"}   http=202
+
+watched live via /api/runs/ui-live1:
+  spec done 3s -> rtl running 8s -> ... -> status done
+final stages: spec 3, rtl 9, lint 1, tb 33, sim 10, synth 0, timing 6, report 5
+event log:
+  sim: checks=8 failed=0 verdict=True
+  cross-check: icarus says True (verilator said True)
+  synth: 28 cells
+  timing: slack=3.34 ns target=200.0 MHz MET via OpenSTA
+  report: 197 words
+  status done
+
+6. Output in multiple formats (all through the tunnel)
+------------------------------------------------------
+report.md      200, starts "### Specification — The `counter_8b_sat` module…"
+board.json     200 (listed in artifacts)
+verilog        200, `timescale 1ns/1ps module counter_8b_sat (…)
+waves          /api/runs/live-waves/waves -> 11 signals, 11 ascii lines
+examples       ['alu', 'counter', 'fifo']   (clickable suggested inputs)
+history        /api/runs -> every run paired with its input line 1
+
+7. ui/tunnel.sh
+---------------
+$ PORT=8094 bash ui/tunnel.sh
+tunnel: local :8094 -> box loopback (ctrl-c stops; the box never opens a public port)
+open:    http://localhost:8094/?t=m2d2qejHO7Sn7kAif9E6dZRF
+$ curl ... http://127.0.0.1:8094/ -> 200, static/app.css -> 200, /api/runs -> 200
+
+Two bugs found and fixed during verification:
+  - ssh lacked -N: the remote shell got EOF and tore down the forward
+    before the browser (or curl) could use it.
+  - -L pointed at $PORT on the box instead of the ui port 8080, so a
+    custom local PORT forwarded to a closed remote port ("connect
+    failed: Connection refused" in the ssh log).
+Both fixed in ui/tunnel.sh and re-tested: 200/200/200 through :8094.
+
+Security shape
+--------------
+- ui.service binds 127.0.0.1:8080 (ss proof above); no inbound SG rule
+  added — the group still has exactly one: tcp/22 from the client ip.
+- every /api/* requires the token even on loopback (401 proven).
+- run ids and artifact paths validated server-side; traversal returns 404.
+- keys are read on the box only; the browser receives none.

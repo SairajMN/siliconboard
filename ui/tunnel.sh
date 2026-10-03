@@ -46,6 +46,7 @@ TOKEN_URL="$(ssh "${SSH_OPTS[@]}" "ubuntu@$HOST" \
 OPEN_URL="$(printf '%s' "$TOKEN_URL" | sed -E 's#http://127\.0\.0\.1:[0-9]+#http://localhost:'"$PORT"'#')"
 
 BIND="127.0.0.1"
+BOX_PORT=8080   # what siliconboard-ui.service listens on, on the box
 if [ "$PHONE" = 1 ]; then
     BIND="0.0.0.0"
     LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
@@ -63,5 +64,5 @@ else
     echo "open:    http://localhost:$PORT/  (token url: ssh sudo journalctl -u siliconboard-ui)"
 fi
 
-exec ssh "${SSH_OPTS[@]}" -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-    -L "$BIND:$PORT:127.0.0.1:$PORT" "ubuntu@$HOST"
+exec ssh "${SSH_OPTS[@]}" -N -T -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+    -L "$BIND:$PORT:127.0.0.1:$BOX_PORT" "ubuntu@$HOST"
