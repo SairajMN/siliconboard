@@ -58,7 +58,7 @@ summary: module counter_8bit_saturating, sim_passed True, checks 10,
 5. A run STARTED through the UI (POST /api/run) completed end-to-end
 --------------------------------------------------------------------
 $ curl -X POST -d '{"run_id":"ui-live1","request":"8-bit up counter ...",
-                    "cross_sim":true}' .../api/runs/../api/run
+                    "cross_sim":true}' 'http://127.0.0.1:8080/api/run?t=...'
 {"run_id": "ui-live1"}   http=202
 
 watched live via /api/runs/ui-live1:
