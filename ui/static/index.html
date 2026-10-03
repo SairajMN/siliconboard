@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>siliconboard</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip" href="#req">Skip to the request</a>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">SB</span>
+    <span class="word">siliconboard</span>
+  </div>
+  <div class="sys" id="sys" aria-live="polite"></div>
+  <button class="ghost" id="help-btn" type="button">How it works</button>
+</header>
+
+<div class="layout">
+  <aside class="rail">
+    <div class="rail-head">
+      <h2>Designs</h2>
+      <button class="primary tiny" id="new-btn" type="button">New</button>
+    </div>
+    <div id="suggest"></div>
+    <div id="samples"></div>
+    <div id="hist"></div>
+  </aside>
+
+  <main class="main">
+    <section class="compose">
+      <label for="req">Describe the block</label>
+      <textarea id="req" rows="6" spellcheck="false"
+        placeholder="A 4-bit up counter with synchronous active-low reset and an enable. Saturates at 1111. Target 200 MHz."></textarea>
+
+      <div class="opts">
+        <label class="chk"><input type="checkbox" id="cross"> second simulator cross-check</label>
+        <label class="chk"><input type="checkbox" id="waves" checked> dump a waveform</label>
+      </div>
+
+      <div class="go">
+        <input id="runid" placeholder="run id (optional)" autocomplete="off" spellcheck="false">
+        <button class="primary" id="run-btn" type="button">Run pipeline</button>
+      </div>
+      <p class="hint" id="hint">Runs on the box. Leaves <code>runs/&lt;id&gt;/board.json</code> and a report.</p>
+    </section>
+
+    <section class="work" id="work" hidden>
+      <div class="work-head">
+        <div>
+          <div class="runline">
+            <span class="rid" id="work-id"></span>
+            <span class="chip" id="work-state"></span>
+          </div>
+          <div class="sub" id="work-sub"></div>
+        </div>
+        <button class="ghost tiny" id="refresh" type="button">Refresh</button>
+      </div>
+
+      <div class="strip" id="strip"></div>
+
+      <h3 class="cap">Agents</h3>
+      <ol class="timeline" id="timeline"></ol>
+
+      <h3 class="cap">Output</h3>
+      <div class="tabs" id="tabs" role="tablist"></div>
+      <div class="panel" id="panel" role="tabpanel"></div>
+    </section>
+
+    <section class="empty" id="empty">
+      <h2>Start with an example</h2>
+      <p>Pick a design on the left, or write one above. Nothing is sent anywhere except your
+        own box; the tools decide every fact, the models only propose.</p>
+    </section>
+  </main>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="card" role="dialog" aria-modal="true" aria-labelledby="ob-title">
+    <h2 id="ob-title">How siliconboard works</h2>
+    <ol class="steps">
+      <li><strong>Write</strong> a plain-English block description and press Run.</li>
+      <li><strong>Watch</strong> each agent go: spec, RTL, lint, testbench, simulate, debug, synthesise, timing, report.</li>
+      <li><strong>Read</strong> the output — report, Verilog, waveform, and the raw tool evidence.</li>
+    </ol>
+    <p class="rule">The models propose, the tools decide. A pass comes from a Verilator log,
+      a cell count from Yosys, a slack from OpenSTA — never from the model's word.</p>
+    <button class="primary" id="ob-close" type="button">Got it</button>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
