@@ -81,7 +81,7 @@ flowchart TB
     Synth[Synthesize Agent<br/>Verilog → Yosys stat]
     STA[Timing Agent<br/>netlist → OpenSTA slack]
     Report[Report Agent<br/>artifacts → report.md]
-    End((Run End)):::end
+    End((Run End)):::finish
 
     Start --> Spec
     Spec --> RTL
@@ -105,7 +105,7 @@ flowchart TB
     end
 
     classDef start fill:#4be,stroke:#333,stroke-width:2px;
-    classDef end fill:#f44,stroke:#333,stroke-width:2px;
+    classDef finish fill:#f44,stroke:#333,stroke-width:2px;
 ```
 
 **The harness is custom code** — `orchestrator.py` implements the forward/backward routing, retry policy, and Board persistence. Agents are single-job files in `agents/`. No LangChain, no LangGraph, no CrewAI, no ADK.
