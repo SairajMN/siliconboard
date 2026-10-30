@@ -134,10 +134,6 @@ backward routing, the retry policy and Board persistence. Agents are single-job
 files in `agents/`. Green-bordered nodes are decided by a real tool, not by the
 model. Failures route back through the Debug agent under the retry policy.
 
-<p align="center">
-  <img src="docs/agent-loop.svg" width="900"
-       alt="Animated diagram of one example run through the agent loop: the simulation fails, the Debug agent patches the RTL, and the second pass continues through synthesis and timing to the report.">
-</p>
 
 <p align="center">
   <img src="agent-loop.svg" width="900"
