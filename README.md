@@ -2,8 +2,8 @@
 
 Multi-agent chip design system. One shared Pydantic `Board` holds all design
 state, a deterministic Python `Orchestrator` reads the Board's status and
-dispatches single-job agents, and the two agents that decide correctness call
-real EDA tools with no LLM involved.
+dispatches single-job agents, and the agents that decide correctness (lint,
+simulate, synthesize, timing) call real EDA tools with no LLM involved.
 
 Rule the whole project is built around: **LLM agents propose, tools decide.**
 `passed` comes from a Verilator log, `clean` from a Verilator exit code,
@@ -15,105 +15,24 @@ provider doesn't stop a run.
 No agent framework: no LangChain, no LangGraph, no CrewAI, no ADK. The loop,
 the routing and the retry policy live in `orchestrator.py` and are ours.
 
-## EC2 Infrastructure — What Runs Where and How It Connects
+## Contents
 
-```mermaid
-flowchart TB
-    subgraph EC2["AWS EC2 t3.micro (ap-south-1)"]
-        direction TB
-        subgraph Box["Ubuntu Box"]
-            direction LR
-            subgraph Services["Systemd Services"]
-                UI["ui/server.py<br/>127.0.0.1:8080"]
-                Tunnel["cloudflared<br/>siliconboard-tunnel"]
-            end
-            UI <-->|loopback TCP| Tunnel
-        end
+- [Quickstart](#quickstart)
+- [Running a design](#running-a-design)
+- [Checks](#checks)
+- [Architecture](#architecture)
+- [The agent loop](#the-agent-loop)
+- [Seeing the design](#seeing-the-design)
+- [Running the UI](#running-the-ui)
+- [Request flow](#request-flow)
+- [Auth gate](#auth-gate)
+- [Live deployment](#live-deployment)
+- [Repository layout](#repository-layout)
+- [Conventions](#conventions)
 
-        subgraph Harness["Custom LLM Harness (in-process)"]
-            direction TB
-            Orch[Orchestrator<br/>forward/backward routing<br/>retry policy]
-            Spec[Spec Agent]
-            RTL[RTL Agent]
-            Lint[Lint Agent]
-            TB[Testbench Agent]
-            Sim[Simulate Agent]
-            Debug[Debug Agent]
-            Synth[Synthesize Agent]
-            STA[Timing Agent]
-            Report[Report Agent]
-            Orch --> Spec
-            Spec --> RTL
-            RTL --> Lint
-            Lint -->|fail| Debug
-            Lint -->|pass| TB
-            TB --> Sim
-            Sim -->|fail| Debug
-            Sim -->|pass| Synth
-            Debug --> RTL
-            Synth --> STA
-            STA -->|fail| Debug
-            STA -->|pass| Report
-        end
-
-        subgraph EDA["EDA Container"]
-            direction TB
-            Yosys[Yosys<br/>synthesis]
-            Verilator[Verilator<br/>lint + sim]
-            Icarus[Icarus Verilog<br/>cross-sim]
-            OpenSTA[OpenSTA<br/>timing analysis]
-        end
-
-        Store[(runs/<id>/board.json)]
-
-        UI -->|auth gate + API| Harness
-        Harness -->|tool calls| EDA
-        UI -.-> Store
-        Harness -.-> Store
-    end
-
-    subgraph Edge["Cloudflare Edge"]
-        CF[Cloudflare Edge<br/>TLS termination]
-    end
-
-    subgraph LLMs["LLM Providers (External)"]
-        direction TB
-        Gemini[Gemini<br/>primary]
-        Groq[Groq<br/>fallback 1]
-        NVIDIA[NVIDIA<br/>fallback 2]
-    end
-
-    Mentor((Mentor Browser)) -->|HTTPS<|end|> CF
-    CF -->|outbound tunnel| Tunnel
-    Tunnel -->|loopback TCP| UI
-    Harness -->|LLM calls| Gemini
-    Gemini -->|rate limited| Groq
-    Groq -->|rate limited| NVIDIA
-
-    subgraph Storage["Persistent Storage"]
-        Runs[runs/<id>/board.json<br/>full design history]
-    end
-
-    UI -.-> Runs
-    Harness -.-> Runs
-```
-
-**What runs where:**
-- **EC2 t3.micro (ap-south-1)**: Ubuntu box running two systemd services — `siliconboard-ui` (Python stdlib server on 127.0.0.1:8080) and `siliconboard-tunnel` (cloudflared)
-- **Cloudflare Edge**: Terminates TLS, forwards to tunnel over TCP 443
-- **LLM Providers**: Gemini (primary), Groq (fallback 1), NVIDIA (fallback 2) — external, called via HTTP API
-- **EDA Container**: Docker container with Yosys, Verilator, Icarus Verilog, OpenSTA — tools decide correctness
-- **Storage**: `runs/<id>/board.json` — full design history persisted to disk
-
-**Connection flow:**
-1. Mentor browser → Cloudflare Edge (HTTPS) → outbound tunnel → 127.0.0.1:8080 (UI)
-2. UI verifies password gate → hands off to Orchestrator in same process
-3. Orchestrator dispatches agents → agents call LLM providers (Gemini → Groq → NVIDIA fallback)
-4. Lint/Sim/Synth/STA agents call EDA tools inside Docker container
-5. Every step written to `runs/<id>/board.json`; UI reads it for live timeline
-
----
 ## Quickstart
+
+You need Python 3 and Docker.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -122,38 +41,6 @@ docker build -t siliconboard/eda:1.0 docker/eda      # yosys + verilator + iveri
 
 cp .env.example .env && chmod 600 .env               # add GEMINI_API_KEY_1..4
 .venv/bin/python main.py doctor                      # keys, docker, tool versions
-```
-## Call Flow — End-to-End Request
-
-```mermaid
-sequenceDiagram
-    participant M as Mentor Browser
-    participant CF as Cloudflare Edge
-    participant TU as Tunnel (cloudflared)
-    participant UI as Python Server (127.0.0.1:8080)
-    participant H as LLM Harness
-    participant EDA as EDA Container
-
-    M->>CF: GET https://...trycloudflare.com
-    CF-->>M: HTML + password prompt
-    M->>CF: POST /api/login {password}
-    CF->>TU: forward (outbound)
-    TU->>UI: POST /api/login
-    UI->>UI: check_password() - constant-time compare
-    UI-->>TU: 200 ok + sb_session cookie
-    TU-->>CF-->>M: token saved in sessionStorage
-    M->>CF: POST /api/run {spec, run-id}
-    CF->>TU->>UI: POST /api/run
-    UI->>UI: verify cookie
-    UI->>H: start_run()
-    H->>EDA: lint / sim / synth / sta
-    EDA-->>H: tool results (PASS/FAIL, cells, slack)
-    H->>H: write board.json entries
-    UI-->>TU-->>CF-->>M: run-id returned
-    M->>CF: GET /api/runs
-    CF->>TU->>UI: GET /api/runs
-    UI->>UI: read runs/<id>/board.json
-    UI-->>TU-->>CF-->>M: timeline + output tabs
 ```
 
 ## Running a design
@@ -166,8 +53,8 @@ sequenceDiagram
 .venv/bin/python main.py waves                  # which runs dumped a waveform, and how to open it
 ```
 
-Every run leaves `runs/<id>/board.json` — the whole design history, one entry per
-RTL version, simulation, bug report and tool log — so any claim the system makes
+Every run leaves `runs/<id>/board.json`: the whole design history, one entry per
+RTL version, simulation, bug report and tool log, so any claim the system makes
 about its own work can be checked against what actually happened.
 
 ## Checks
@@ -182,7 +69,328 @@ says matters. It lints a hand-written module, runs a real Verilator binary
 simulation and asserts exactly one terminal `PASS`, then synthesizes and
 asserts that a cell count parses.
 
-## Layout
+## Architecture
+
+The mentor's browser talks to Cloudflare over real HTTPS. Cloudflare relays the
+connection through an **outbound** tunnel to `127.0.0.1:8080` on the EC2 box, so
+the box opens no inbound port. The Python stdlib server checks the password gate
+(`SB_UI_PASSWORD`) before any API call succeeds. Once authenticated, the
+in-process harness runs the agents, which call the EDA toolchain inside a Docker
+container and write every artifact to `runs/<id>/board.json`.
+
+```mermaid
+flowchart TB
+    Mentor(("Mentor / User")):::actor
+    CF["Cloudflare edge<br/>TLS termination"]:::edge
+    LLM["LLM providers<br/>Gemini → Groq → NVIDIA<br/>fallback chain"]:::ext
+
+    subgraph AWS["AWS EC2 t3.micro · ap-south-1"]
+        subgraph Box["Ubuntu box: loopback only, no inbound port"]
+            CT["cloudflared<br/>systemd: siliconboard-tunnel<br/>outbound only"]:::infra
+            UI["ui/server.py<br/>Python stdlib HTTP server<br/>127.0.0.1:8080"]:::server
+            Auth["Password gate<br/>SB_UI_PASSWORD<br/>5-strike lockout"]:::gate
+            Harness["Custom harness (in-process)<br/>orchestrator.py + 9 single-job agents"]:::harness
+            Store[("runs/#lt;id#gt;/board.json<br/>full design history")]:::store
+            EDA["EDA container<br/>docker: siliconboard/eda:1.0<br/>Yosys, Verilator, Icarus, OpenSTA"]:::tools
+        end
+    end
+
+    Mentor -->|"HTTPS + password"| CF
+    CF <-->|"outbound tunnel, TCP 443"| CT
+    CT <-->|"loopback TCP"| UI
+    UI -.->|"checks"| Auth
+    UI -->|"API (after gate)"| Harness
+    UI -.->|"read"| Store
+    Harness -->|"persist"| Store
+    Harness -->|"tool calls"| EDA
+    Harness -->|"LLM calls via llm.py"| LLM
+
+    classDef actor fill:#f96,stroke:#333,stroke-width:2px,color:#111;
+    classDef edge fill:#f9f,stroke:#333,stroke-width:2px,color:#111;
+    classDef server fill:#bbf,stroke:#333,stroke-width:2px,color:#111;
+    classDef gate fill:#fcc,stroke:#333,stroke-width:2px,color:#111;
+    classDef infra fill:#dfd,stroke:#333,stroke-width:2px,color:#111;
+    classDef harness fill:#ffd,stroke:#333,stroke-width:2px,color:#111;
+    classDef ext fill:#dff,stroke:#333,stroke-width:2px,color:#111;
+    classDef store fill:#eee,stroke:#333,stroke-width:2px,color:#111;
+    classDef tools fill:#cfc,stroke:#333,stroke-width:2px,color:#111;
+```
+
+| Layer | Process | How it connects |
+|---|---|---|
+| **Edge** | Cloudflare edge | Terminates TLS, relays to the tunnel over TCP 443 |
+| **Tunnel** | `cloudflared` (systemd: `siliconboard-tunnel`) | Dials outbound to Cloudflare, forwards to `127.0.0.1:8080` on loopback |
+| **UI** | `ui/server.py` (systemd: `siliconboard-ui`) | Binds `127.0.0.1:8080` only, enforces the password gate on every API call |
+| **Auth** | `SB_UI_PASSWORD` check | Constant-time compare, 5-strike lockout, `sb_session` cookie (HttpOnly, SameSite=Strict, 12 h TTL) |
+| **Harness** | `orchestrator.py` (in-process) | Runs inside the same Python process as the UI; agents call LLM providers via `llm.py` |
+| **LLM providers** | Gemini → Groq → NVIDIA | Gemini is primary; the chain takes over if it is rate-limited or out of credits |
+| **EDA container** | `siliconboard/eda:1.0` | Yosys, Verilator, Icarus Verilog, OpenSTA. Tools decide, LLMs propose |
+| **Storage** | `runs/<id>/board.json` | Full design history on disk, read by the UI for the timeline and output tabs |
+
+## The agent loop
+
+**The harness is custom code.** `orchestrator.py` implements the forward and
+backward routing, the retry policy and Board persistence. Agents are single-job
+files in `agents/`. Green nodes below are decided by a real tool, not by the
+model. Failures route back through the Debug agent under the retry policy.
+
+```mermaid
+flowchart TB
+    Start(("Run start")):::terminal
+    Spec["Spec Agent<br/>plain English → design spec"]
+    RTL["RTL Agent<br/>spec → Verilog module"]
+    Lint["Lint Agent<br/>Verilog → Verilator lint"]:::tool
+    TBench["Testbench Agent<br/>module → testbench"]
+    Sim["Simulate Agent<br/>testbench → Verilator run<br/>(+ iverilog with --cross-sim)"]:::tool
+    Debug["Debug Agent<br/>failure → patch RTL"]
+    Synth["Synthesize Agent<br/>Verilog → Yosys stat"]:::tool
+    STA["Timing Agent<br/>netlist → OpenSTA slack"]:::tool
+    Report["Report Agent<br/>artifacts → report.md"]
+    Done(("Run end")):::terminal
+
+    Start --> Spec
+    Spec --> RTL
+    RTL --> Lint
+    Lint -->|"fail"| Debug
+    Lint -->|"pass"| TBench
+    TBench --> Sim
+    Sim -->|"fail"| Debug
+    Sim -->|"pass"| Synth
+    Debug -->|"patched RTL"| RTL
+    Synth --> STA
+    STA -->|"fail"| Debug
+    STA -->|"pass"| Report
+    Report --> Done
+
+    classDef terminal fill:#4be,stroke:#333,stroke-width:2px,color:#111;
+    classDef tool fill:#cfc,stroke:#2a2,stroke-width:3px,color:#111;
+```
+
+## Seeing the design
+
+A run is four things you can open: the report, the board, a VCD waveform, and
+the web UI (over an ssh tunnel or the public link).
+
+### Web UI
+
+The server (`ui/server.py`, stdlib only) binds **127.0.0.1:8080 and nothing
+else**. Two credentials, never both at once:
+
+- **no `SB_UI_PASSWORD`**: the shared token in the printed URL (local dev)
+- **`SB_UI_PASSWORD` set**: only the password, via `POST /api/login`.
+  Constant-time compare, five wrong tries lock the gate for a minute, and the
+  token stops working entirely. The session is an `HttpOnly; SameSite=Strict`
+  cookie; the password never appears in a URL or in storage.
+
+What it gives you:
+
+- **live workflow**: which agent is working right now, how long each agent
+  took, what it produced (module, ports, checks, cells, slack), streamed from
+  `board.json` as the run writes it
+- **first-use instructions** on the page, suggested specs you can click, and a
+  golden run you can browse before spending a cent on tokens
+- **output in multiple formats**: report.md, board.json, syntax-highlighted
+  Verilog, ASCII waveform, tool logs, all read from the run's own artifacts
+- **history**: every run paired with the input that produced it
+
+Keys never reach the browser.
+
+### Terminal
+
+A run is also three files you can open without any UI: the report, the board,
+and (with `--waves`) a VCD waveform.
+
+```bash
+.venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w1 --waves
+.venv/bin/python main.py waves                      # every run that dumped one
+.venv/bin/python main.py waves --run-id w1          # signals, widths, time span
+.venv/bin/python main.py waves --run-id w1 --draw   # draw it here, no viewer needed
+.venv/bin/python main.py waves --run-id w1 --open   # launch a GUI viewer, if one is installed
+```
+
+`--draw` is the default answer: it parses the VCD itself and prints a timing
+diagram in the terminal, so nothing has to be installed. Buses also get their
+value sequence printed underneath, so `count` reads as `0 1 2 … 255` rather
+than a smear of overlapping labels.
+
+If you want a real GUI viewer on macOS, `brew install surfer` works (it is a
+formula, not a cask; the project lives at
+[gitlab.com/surfer-project/surfer](https://gitlab.com/surfer-project/surfer)).
+The `gtkwave` cask is disabled in Homebrew. `--open` uses `surfer`, `gtkwave` or
+`vcd2fst` if any is present.
+
+`--draw` is behaviour over time, not a schematic. For an 8-bit counter a
+picture of 28 cells would tell you less than `main.py diff` does.
+
+## Running the UI
+
+Pick one of four modes. All of them keep the server on loopback.
+
+**1. Local, token mode** (no password, local dev only)
+
+```bash
+.venv/bin/python ui/server.py --port 8080
+# prints: http://127.0.0.1:8080/?t=<token>
+# Share that exact URL: the token is the credential
+```
+
+**2. Local, password mode**
+
+```bash
+SB_UI_PASSWORD='your-password' .venv/bin/python ui/server.py --port 8080
+```
+
+**3. Remote box over an SSH tunnel** (the server already runs there as `siliconboard-ui`)
+
+```bash
+bash ui/tunnel.sh              # from your laptop: ssh tunnel, prints the local url
+bash ui/tunnel.sh --phone      # also reachable from a phone/tablet on your Wi-Fi
+```
+
+**4. Public link via a Cloudflare quick tunnel** (no open ports)
+
+```bash
+UI_PASSWORD='your-password' bash deploy/deploy.sh
+# Pass 1: sets SB_UI_PASSWORD in /etc/siliconboard/env, installs services
+# Pass 2: re-deploys without recreating the box (SKIP_STA=1)
+# Prints: https://….trycloudflare.com
+```
+
+`deploy/deploy.sh` installs and health-checks the `siliconboard-ui` unit
+(loopback only) plus the `siliconboard-tunnel` unit, both with `Restart=always`.
+The box still listens on **127.0.0.1 only**: no inbound port, no security-group
+rule (still just `tcp/22` from your IP), TLS terminated at the edge. The
+password is the whole security boundary: anyone with the URL but not the
+password gets `401`. Run it again with a new `UI_PASSWORD` to rotate it.
+
+## Request flow
+
+One login, one run, one poll, end to end. Every request enters through
+Cloudflare and the tunnel; responses travel back the same way.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as Mentor browser
+    participant CF as Cloudflare edge
+    participant TU as cloudflared tunnel
+    participant UI as UI server (127.0.0.1:8080)
+    participant H as Harness
+    participant EDA as EDA container
+
+    Note over M,UI: Load the page and log in
+    M->>CF: GET https://….trycloudflare.com
+    CF->>TU: relay over outbound tunnel
+    TU->>UI: GET /
+    UI-->>M: 200 HTML with password prompt
+    M->>CF: POST /api/login {password}
+    CF->>TU: relay
+    TU->>UI: POST /api/login
+    UI->>UI: constant-time password check
+    UI-->>M: 200 + Set-Cookie sb_session (HttpOnly, SameSite=Strict)
+
+    Note over M,H: Start a run
+    M->>CF: POST /api/run {spec, run-id}
+    CF->>TU: relay
+    TU->>UI: POST /api/run
+    UI->>UI: verify sb_session cookie
+    UI->>H: start_run()
+    UI-->>M: 200 run-id
+    loop each pipeline step
+        H->>EDA: lint / sim / synth / sta
+        EDA-->>H: tool results (PASS/FAIL, cells, slack)
+        H->>H: append entries to board.json
+    end
+
+    Note over M,UI: Watch progress (repeated while the run is active)
+    M->>CF: GET /api/runs
+    CF->>TU: relay
+    TU->>UI: GET /api/runs
+    UI->>UI: read runs/#lt;id#gt;/board.json
+    UI-->>M: timeline + output tabs
+```
+
+## Auth gate
+
+How the server decides what to do with a request. The landing page and the
+`/api/auth` probe are public so the page can show a password prompt; everything
+else needs a credential.
+
+```mermaid
+flowchart TD
+    Req(["Incoming request"]):::entry
+    Public{"GET / or<br/>GET /api/auth?"}
+    OpenOK["200: landing page or auth mode<br/>(public, no credential needed)"]:::ok
+    Mode{"SB_UI_PASSWORD set?"}
+
+    Tok{"?t= token matches?"}
+    IsLogin{"POST /api/login?"}
+    Cookie{"Valid sb_session cookie?"}
+    Locked{"Gate locked?"}
+    PW{"Password matches?<br/>(constant-time compare)"}
+
+    Issue["200: issue sb_session cookie<br/>(12 h TTL)"]:::ok
+    Strike["fails++<br/>401 with tries left"]:::deny
+    Lockout["Gate locked for 60 seconds<br/>401 to all login attempts"]:::deny
+    Denied["401 password required"]:::deny
+
+    Route{"Route?"}
+    RunAPI["POST /api/run<br/>start_run(): agent loop"]:::ok
+    RunsAPI["GET /api/runs<br/>read board.json"]:::ok
+
+    Req --> Public
+    Public -->|"yes"| OpenOK
+    Public -->|"no"| Mode
+
+    Mode -->|"no (token mode)"| Tok
+    Tok -->|"yes"| Route
+    Tok -->|"no"| Denied
+
+    Mode -->|"yes (password mode)"| IsLogin
+    IsLogin -->|"no"| Cookie
+    Cookie -->|"yes"| Route
+    Cookie -->|"no"| Denied
+
+    IsLogin -->|"yes"| Locked
+    Locked -->|"yes"| Lockout
+    Locked -->|"no"| PW
+    PW -->|"yes"| Issue
+    PW -->|"no"| Strike
+    Strike -->|"5th wrong try"| Lockout
+
+    Route -->|"POST /api/run"| RunAPI
+    Route -->|"GET /api/runs"| RunsAPI
+
+    classDef entry fill:#4be,stroke:#333,stroke-width:2px,color:#111;
+    classDef ok fill:#cfc,stroke:#333,stroke-width:1px,color:#111;
+    classDef deny fill:#fcc,stroke:#333,stroke-width:1px,color:#111;
+```
+
+## Live deployment
+
+Snapshot of the published instance.
+
+| Item | Value |
+|---|---|
+| **Instance** | EC2 t3.micro, `ap-south-1` |
+| **Public URL** | `https://experiencing-occupied-sea-footage.trycloudflare.com` |
+| **Password** | Shared privately. Never commit it; set it with `UI_PASSWORD` when deploying |
+| **TLS** | Real certificate (Google Trust Services), terminated at Cloudflare's edge |
+| **Box listener** | `127.0.0.1:8080` only (loopback) |
+| **Security group** | `tcp/22` from your IP only, **no inbound port opened** |
+| **UI systemd unit** | `siliconboard-ui`: `active`, `enabled` |
+| **Tunnel systemd unit** | `siliconboard-tunnel`: `active`, `enabled`, `Restart=always` |
+| **Sessions** | In-memory, 12-hour TTL, `HttpOnly; SameSite=Strict` cookie |
+
+> **Heads up:** a Cloudflare quick-tunnel URL is random and changes whenever
+> `cloudflared` starts fresh, so the URL above goes stale after a redeploy or a
+> restart. `deploy/deploy.sh` prints the current one.
+
+The password gate is enforced on every API call. Wrong passwords increment a
+strike counter, and five strikes lock the gate for 60 seconds (see
+[Auth gate](#auth-gate)).
+
+## Repository layout
 
 | Path | What lives there |
 |---|---|
@@ -199,170 +407,9 @@ asserts that a cell count parses.
 | `deploy/` | one-command laptop deploy (`deploy.sh`), server bootstrap, systemd unit, compose file |
 | `ui/` | web UI: per-agent timeline renderer, stdlib HTTP server, one static page, ssh tunnel helper |
 | `TASKS.md` | the ledger: every task, its verify command, its evidence file |
-| `PONYTAIL-DEBT.md` | every shortcut still in the tree, with the trigger that retires it |
 
-## Seeing the design
-
-A run is four things you can open: the report, the board, a VCD waveform, and —
-over ssh — the web UI.
-
-### Web UI
-
-The server (`ui/server.py`, stdlib only) binds **127.0.0.1:8080 and nothing
-else**. Two credentials, never both at once:
-
-- **no `SB_UI_PASSWORD`** — the shared token in the printed URL (local dev)
-- **`SB_UI_PASSWORD` set** — only the password, via `POST /api/login`:
-  constant-time compare, five wrong tries lock the gate for a minute, and the
-  token stops working entirely. The session is an `HttpOnly; SameSite=Strict`
-  cookie; the password never appears in a URL or in storage.
-
-There are two ways to reach that loopback port:
-
-```bash
-bash ui/tunnel.sh              # laptop: ssh tunnel, prints the local url
-bash ui/tunnel.sh --phone      # also reachable from a phone/tablet on your Wi-Fi
-```
-
-or, for a link anyone can open, the public door — an **outbound Cloudflare
-quick tunnel** that `deploy/deploy.sh` installs and health-checks:
-
-```bash
-UI_PASSWORD='...' bash deploy/deploy.sh     # set/rotate the password + publish
-```
-
-It gives you an `https://….trycloudflare.com` URL while the box still listens
-on **127.0.0.1 only**: no inbound port, no security-group rule (still just
-`tcp/22` from your IP), TLS terminated at the edge. The password is the whole
-security boundary — anyone with the URL but not the password gets `401`.
-
-What it gives you:
-
-- **live workflow** — which agent is working right now, how long each agent
-  took, what it produced (module, ports, checks, cells, slack), streamed from
-  `board.json` as the run writes it
-- **first-use instructions** on the page, suggested specs you can click, and a
-  golden run you can browse before spending a cent on tokens
-- **output in multiple formats** — report.md, board.json, syntax-highlighted
-  Verilog, ASCII waveform, tool logs — all read from the run's own artifacts
-- **history** — every run paired with the input that produced it
-
-`deploy/deploy.sh` installs and health-checks the `siliconboard-ui` unit
-(loopback only) plus the `siliconboard-tunnel` unit when publishing. Keys
-never reach the browser.
-
-### Terminal
-
-A run is also three files you can open without any UI: the report, the board,
-and — with `--waves` — a VCD waveform.
-
-```bash
-.venv/bin/python main.py run --spec examples/counter/spec.txt --run-id w1 --waves
-.venv/bin/python main.py waves                      # every run that dumped one
-.venv/bin/python main.py waves --run-id w1          # signals, widths, time span
-.venv/bin/python main.py waves --run-id w1 --draw   # draw it here, no viewer needed
-.venv/bin/python main.py waves --run-id w1 --open   # launch a GUI viewer, if one is installed
-```
-
-`--draw` is the default answer: it parses the VCD itself and prints a timing
-diagram in the terminal, so nothing has to be installed. Buses also get their
-value sequence printed underneath, so `count` reads as `0 1 2 … 255` rather
-than a smear of overlapping labels.
-
-There is no `brew install` for a VCD viewer that works — `surfer` has no cask
-and `gtkwave` is disabled in Homebrew. If you want a real GUI, `surfer`
-(the VCD viewer at `github.com/thesurver/surfer`) ships a `.dmg` on its
-releases page. `--open` uses `surfer`, `gtkwave` or `vcd2fst` if any is present.
-
-`--draw` is behaviour over time, not a schematic. For an 8-bit counter a
-picture of 28 cells would tell you less than `main.py diff` does.
 
 ## Conventions
 
-## If-Struct — Routing & Conditional Logic
-
-```mermaid
-flowchart TD
-    Start([API Request])
-
-    AuthGate{SB_UI_PASSWORD configured?}
-
-    NoAuth[Token mode: accept ?t= shared URL token]
-    YesAuth[Password mode: POST /api/login required]
-
-    CookieValid{sb_session cookie valid?}
-
-    Locked{Fails >= 5?}
-
-    Lockout[Gate locked: 60 seconds 401 to all]
-
-    WrongPW[Wrong password: fails++ 401 with tries left]
-
-    CorrectPW[Password matches: constant-time issue sb_session cookie]
-
-    ProtectedPath{Route matched?}
-
-    PublicGET[GET / -> 200 public landing]
-
-    AuthProbe[GET /api/auth -> {mode: password}]
-
-    RunAPI[POST /api/run -> start_run() agent loop]
-
-    RunsAPI[GET /api/runs -> read board.json]
-
-    Denied[401 password required]
-
-    Start --> AuthGate
-    AuthGate -->|no| NoAuth
-    AuthGate -->|yes| YesAuth
-    YesAuth --> CookieValid
-    CookieValid -->|yes| ProtectedPath
-    CookieValid -->|no| Locked
-    Locked -->|yes| Lockout
-    Locked -->|no| WrongPW
-    WrongPW -->|fails < 5| WrongPW
-    WrongPW -->|fails >= 5| Locked
-    CorrectPW --> ProtectedPath
-    ProtectedPath -->|GET /| PublicGET
-    ProtectedPath -->|GET /api/auth| AuthProbe
-    ProtectedPath -->|POST /api/run| RunAPI
-    ProtectedPath -->|GET /api/runs| RunsAPI
-    ## Harness Detail — The Agent Loop
-
-```mermaid
-flowchart TB
-    Start((Run Start))
-    Spec[Spec Agent<br/>plain English -> design spec]
-    RTL[RTL Agent<br/>spec -> Verilog]
-    Lint[Lint Agent<br/>Verilog -> lint pass]
-    TB[Testbench Agent<br/>module -> testbench]
-    Sim[Simulate Agent<br/>TB -> iverilog run]
-    Debug[Debug Agent<br/>failure -> patch RTL]
-    Synth[Synthesize Agent<br/>Verilog -> Yosys stat]
-    STA[Timing Agent<br/>netlist -> OpenSTA slack]
-    Report[Report Agent<br/>artifacts -> report.md]
-    End((Run End))
-
-    Start --> Spec
-    Spec --> RTL
-    RTL --> Lint
-    Lint -->|fail| Debug
-    Lint -->|pass| TB
-    TB --> Sim
-    Sim -->|fail| Debug
-    Sim -->|pass| Synth
-    Debug --> RTL
-    Synth --> STA
-    STA -->|fail| Debug
-    STA -->|pass| Report
-    Report --> End
-
-    subgraph Tools[Tools decide, LLM proposes]
-        Lint
-        Sim
-        Synth
-        STA
-    end
-```
-
----\n\n## Conventions
+Two dependencies, `google-genai` and `pydantic`. Stdlib and the container do
+the rest.
