@@ -266,7 +266,7 @@ sequenceDiagram
     M->>CF: POST /api/login {password}
     CF->>TU: forward (outbound)
     TU->>UI: POST /api/login
-    UI->>UI: check_password() — constant-time compare
+    UI->>UI: check_password() - constant-time compare
     UI-->>TU: 200 ok + sb_session cookie
     TU-->>CF-->>M: token saved in sessionStorage
     M->>CF: POST /api/run {spec, run-id}
@@ -291,30 +291,30 @@ sequenceDiagram
 flowchart TD
     Start([API Request]):::entry
     
-    AuthGate{SB_UI_PASSWORD<br/>configured?}
+    AuthGate{SB_UI_PASSWORD configured?}
     
-    NoAuth[Token mode:<br/>accept ?t=<br/>shared URL token]
-    YesAuth[Password mode:<br/>POST /api/login<br/>required]
+    NoAuth[Token mode: accept ?t= shared URL token]
+    YesAuth[Password mode: POST /api/login required]
     
-    CookieValid{sb_session<br/>cookie valid?}
+    CookieValid{sb_session cookie valid?}
     
     Locked{Fails >= 5?}
     
-    Lockout[Gate locked<br/>60 seconds<br/>401 to all]
+    Lockout[Gate locked: 60 seconds 401 to all]
     
-    WrongPW[Wrong password<br/>fails++<br/>401 with tries left]
+    WrongPW[Wrong password: fails++ 401 with tries left]
     
-    CorrectPW[Password matches<br/>constant-time<br/>issue sb_session cookie]
+    CorrectPW[Password matches: constant-time issue sb_session cookie]
     
     ProtectedPath{Route matched?}
     
-    PublicGET[GET / → 200<br/>public landing]
+    PublicGET[GET / → 200 public landing]
     
-    AuthProbe[GET /api/auth →<br/>{mode: password}]
+    AuthProbe[GET /api/auth → {mode: password}]
     
-    RunAPI[POST /api/run →<br/>start_run()<br/>agent loop]
+    RunAPI[POST /api/run → start_run() agent loop]
     
-    RunsAPI[GET /api/runs →<br/>read board.json]
+    RunsAPI[GET /api/runs → read board.json]
     
     Denied[401 password required]
     
