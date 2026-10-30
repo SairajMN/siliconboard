@@ -72,15 +72,15 @@ flowchart TB
 ```mermaid
 flowchart TB
     Start((Run Start)):::start
-    Spec[Spec Agent<br/>plain English → design spec]
-    RTL[RTL Agent<br/>spec → Verilog module]
-    Lint[Lint Agent<br/>Verilog → lint pass]
-    TB[Testbench Agent<br/>module → testbench]
-    Sim[Simulate Agent<br/>TB → iverilog run]
-    Debug[Debug Agent<br/>failure → patch RTL]
-    Synth[Synthesize Agent<br/>Verilog → Yosys stat]
-    STA[Timing Agent<br/>netlist → OpenSTA slack]
-    Report[Report Agent<br/>artifacts → report.md]
+    Spec[Spec Agent<br/>plain English -> design spec]
+    RTL[RTL Agent<br/>spec -> Verilog module]
+    Lint[Lint Agent<br/>Verilog -> lint pass]
+    TB[Testbench Agent<br/>module -> testbench]
+    Sim[Simulate Agent<br/>TB -> iverilog run]
+    Debug[Debug Agent<br/>failure -> patch RTL]
+    Synth[Synthesize Agent<br/>Verilog -> Yosys stat]
+    STA[Timing Agent<br/>netlist -> OpenSTA slack]
+    Report[Report Agent<br/>artifacts -> report.md]
     End((Run End)):::finish
 
     Start --> Spec
@@ -261,7 +261,7 @@ sequenceDiagram
     participant H as LLM Harness
     participant EDA as EDA Container
 
-    M->>CF: GET https://…trycloudflare.com
+    M->>CF: GET https://...trycloudflare.com
     CF-->>M: HTML + password prompt
     M->>CF: POST /api/login {password}
     CF->>TU: forward (outbound)
@@ -308,13 +308,13 @@ flowchart TD
     
     ProtectedPath{Route matched?}
     
-    PublicGET[GET / → 200 public landing]
+    PublicGET[GET / -> 200 public landing]
     
-    AuthProbe[GET /api/auth → {mode: password}]
+    AuthProbe[GET /api/auth -> {mode: password}]
     
-    RunAPI[POST /api/run → start_run() agent loop]
+    RunAPI[POST /api/run -> start_run() agent loop]
     
-    RunsAPI[GET /api/runs → read board.json]
+    RunsAPI[GET /api/runs -> read board.json]
     
     Denied[401 password required]
     
@@ -388,15 +388,15 @@ flowchart TB
             subgraph Harness["Custom LLM Harness (in-process)"]
                 direction TB
                 Orch[Orchestrator<br/>forward/backward routing<br/>retry policy]:::llm
-                Spec[Spec Agent<br/>plain English → spec]
-                RTL[RTL Agent<br/>spec → Verilog]
-                Lint[Lint Agent<br/>Verilog → lint PASS]
-                TB[Testbench Agent<br/>module → testbench]
+                Spec[Spec Agent<br/>plain English -> spec]
+                RTL[RTL Agent<br/>spec -> Verilog]
+                Lint[Lint Agent<br/>Verilog -> lint PASS]
+                TB[Testbench Agent<br/>module -> testbench]
                 Sim[Simulate Agent<br/>iverilog run]
-                Debug[Debug Agent<br/>failure → patch RTL]
-                Synth[Synthesize Agent<br/>yosys stat → cells]
-                STA[Timing Agent<br/>OpenSTA → slack]
-                Report[Report Agent<br/>artifacts → report.md]
+                Debug[Debug Agent<br/>failure -> patch RTL]
+                Synth[Synthesize Agent<br/>yosys stat -> cells]
+                STA[Timing Agent<br/>OpenSTA -> slack]
+                Report[Report Agent<br/>artifacts -> report.md]
                 Orch --> Spec
                 Spec --> RTL
                 RTL --> Lint
@@ -425,7 +425,7 @@ flowchart TB
         CT <-->|outbound TCP 443| CF
         UI <-->|loopback TCP| CT
         UI -.->|auth gate + API| Orch
-        Orch -.->|LLM calls| LLM[LLM Providers<br/>Gemini → Groq → NVIDIA<br/>fallback chain]:::ext
+        Orch -.->|LLM calls| LLM[LLM Providers<br/>Gemini -> Groq -> NVIDIA<br/>fallback chain]:::ext
         Harness -.->|tool calls| EDA_Container
         Orch -.->|persist| Store
         UI -.->|read| Store
@@ -452,7 +452,7 @@ flowchart TB
 | **UI** | `ui/server.py` (systemd: `siliconboard-ui`) | Binds `127.0.0.1:8080` only; enforces password gate on every API call |
 | **Auth** | `SB_UI_PASSWORD` check | Constant-time compare, 5-strike lockout, `sb_session` cookie (HttpOnly, SameSite=Strict, 12h TTL) |
 | **LLM Harness** | `orchestrator.py` (in-process) | Runs inside the same Python process as the UI; agents call LLM providers via `llm.py` |
-| **LLM Providers** | Gemini → Groq → NVIDIA | Primary provider Gemini, fallback chain if rate-limited or out of credits |
+| **LLM Providers** | Gemini -> Groq -> NVIDIA | Primary provider Gemini, fallback chain if rate-limited or out of credits |
 | **EDA Container** | `siliconboard/eda:1.0` | Yosys, Verilator, Icarus Verilog, OpenSTA — tools decide, LLMs propose |
 | **Storage** | `runs/<id>/board.json` | Full design history persisted to disk, read by UI for timeline/output tabs |
 
@@ -461,7 +461,7 @@ flowchart TB
 1. **Mentor opens** `https://experiencing-occupied-sea-footage.trycloudflare.com` — Cloudflare terminates TLS.
 2. **Password gate** — `POST /api/login` with `thisisthepass@344##d`; server sets `sb_session` cookie.
 3. **Run pipeline** — `POST /api/run` with spec + run-id; UI verifies cookie, hands off to `orchestrator.start_run()`.
-4. **Harness loop** — Spec → RTL → Lint → TB → Sim → Synth → STA → Report, with Debug backtracking on failures.
+4. **Harness loop** — Spec -> RTL -> Lint -> TB -> Sim -> Synth -> STA -> Report, with Debug backtracking on failures.
 5. **LLM calls** — Each agent calls the LLM router (`llm.py`): Gemini primary, Groq/NVIDIA fallback.
 6. **Tool calls** — Lint/Sim/Synth/STA run inside the EDA Docker container; results flow back to agents.
 7. **Persist** — Every step written to `runs/<id>/board.json`; UI reads it for the live timeline and output tabs.
