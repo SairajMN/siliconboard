@@ -15,8 +15,102 @@ provider doesn't stop a run.
 No agent framework: no LangChain, no LangGraph, no CrewAI, no ADK. The loop,
 the routing and the retry policy live in `orchestrator.py` and are ours.
 
-## Quickstart
+## Architecture Overview
 
+```mermaid
+flowchart TB
+    Mentor((Mentor / User))
+    CF[Cloudflare Edge]:::edge
+    Public["https://experiencing-occupied-sea-footage.trycloudflare.com"]
+
+    subgraph AWS["AWS EC2 t3.micro (ap-south-1)"]
+        direction TB
+        subgraph Box["Ubuntu Box"]
+            direction LR
+            UI["Python Server ui/server.py<br/>127.0.0.1:8080"]:::server
+            Tunnel["cloudflared<br/>systemd: siliconboard-tunnel"]:::infra
+            UI <--> Tunnel
+        end
+
+        subgraph Harness["Custom LLM Harness"]
+            direction TB
+            Spec[Spec Agent]
+            RTL[RTL Agent]
+            Lint[Lint Agent]
+            TB[Testbench Agent]
+            Sim[Simulate Agent]
+            Debug[Debug Agent]
+            Synth[Synthesize Agent]
+            STA[Timing Agent]
+            Report[Report Agent]
+        end
+
+        Store[(runs/<id>/<br/>board.json)]
+        EDA[EDA Container<br/>yosys + verilator + iverilog]
+
+        UI -.-> Store
+        Harness -.-> Store
+        Harness -.-> EDA
+    end
+
+    Mentor -->|HTTPS + password gate| Public
+    Public -->|outbound tunnel| Tunnel
+    Tunnel -->|loopback TCP| UI
+    UI -->|auth gate + API| Harness
+
+    classDef edge fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef server fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef infra fill:#dfd,stroke:#333,stroke-width:2px;
+```
+
+**What runs where:** The mentor's browser talks to Cloudflare over real HTTPS. Cloudflare forwards the connection through an outbound tunnel to `127.0.0.1:8080` on the EC2 box. The Python stdlib server checks the password gate (`SB_UI_PASSWORD`) before any API call succeeds. Once authenticated, the custom LLM harness runs agents that call the EDA toolchain inside a Docker container. Every artifact is written to `runs/<id>/board.json`.
+
+---
+
+## Harness Detail — The Agent Loop
+
+```mermaid
+flowchart TB
+    Start((Run Start)):::start
+    Spec[Spec Agent<br/>plain English → design spec]
+    RTL[RTL Agent<br/>spec → Verilog module]
+    Lint[Lint Agent<br/>Verilog → lint pass]
+    TB[Testbench Agent<br/>module → testbench]
+    Sim[Simulate Agent<br/>TB → iverilog run]
+    Debug[Debug Agent<br/>failure → patch RTL]
+    Synth[Synthesize Agent<br/>Verilog → Yosys stat]
+    STA[Timing Agent<br/>netlist → OpenSTA slack]
+    Report[Report Agent<br/>artifacts → report.md]
+    End((Run End)):::end
+
+    Start --> Spec
+    Spec --> RTL
+    RTL --> Lint
+    Lint -->|fail| Debug
+    Lint -->|pass| TB
+    TB --> Sim
+    Sim -->|fail| Debug
+    Sim -->|pass| Synth
+    Debug --> RTL
+    Synth --> STA
+    STA -->|fail| Debug
+    STA -->|pass| Report
+    Report --> End
+
+    subgraph Tools[Tools decide, LLM proposes]
+        Lint
+        Sim
+        Synth
+        STA
+    end
+
+    classDef start fill:#4be,stroke:#333,stroke-width:2px;
+    classDef end fill:#f44,stroke:#333,stroke-width:2px;
+```
+
+**The harness is custom code** — `orchestrator.py` implements the forward/backward routing, retry policy, and Board persistence. Agents are single-job files in `agents/`. No LangChain, no LangGraph, no CrewAI, no ADK.
+
+## Quickstart
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
@@ -153,3 +247,265 @@ Two dependencies, `google-genai` and `pydantic`. Stdlib and the container do
 the rest. Comments explain *why*, never *what*; deferred work is marked
 `# ponytail: <ceiling>, upgrade when <trigger>` so it can be harvested into a
 debt ledger instead of rotting.
+
+---
+
+## Call Flow — End-to-End Request
+
+```mermaid
+sequenceDiagram
+    participant M as Mentor Browser
+    participant CF as Cloudflare Edge
+    participant TU as Tunnel (cloudflared)
+    participant UI as Python Server (127.0.0.1:8080)
+    participant H as LLM Harness
+    participant EDA as EDA Container
+
+    M->>CF: GET https://…trycloudflare.com
+    CF-->>M: HTML + password prompt
+    M->>CF: POST /api/login {password}
+    CF->>TU: forward (outbound)
+    TU->>UI: POST /api/login
+    UI->>UI: check_password() — constant-time compare
+    UI-->>TU: 200 ok + sb_session cookie
+    TU-->>CF-->>M: token saved in sessionStorage
+    M->>CF: POST /api/run {spec, run-id}
+    CF->>TU->>UI: POST /api/run
+    UI->>UI: verify cookie
+    UI->>H: start_run()
+    H->>EDA: lint / sim / synth / sta
+    EDA-->>H: tool results (PASS/FAIL, cells, slack)
+    H->>H: write board.json entries
+    UI-->>TU-->>CF-->>M: run-id returned
+    M->>CF: GET /api/runs
+    CF->>TU->>UI: GET /api/runs
+    UI->>UI: read runs/<id>/board.json
+    UI-->>TU-->>CF-->>M: timeline + output tabs
+```
+
+---
+
+## If-Struct — Routing & Conditional Logic
+
+```mermaid
+flowchart TD
+    Start([API Request]):::entry
+    
+    AuthGate{SB_UI_PASSWORD<br/>configured?}
+    
+    NoAuth[Token mode:<br/>accept ?t=<br/>shared URL token]
+    YesAuth[Password mode:<br/>POST /api/login<br/>required]
+    
+    CookieValid{sb_session<br/>cookie valid?}
+    
+    Locked{Fails >= 5?}
+    
+    Lockout[Gate locked<br/>60 seconds<br/>401 to all]
+    
+    WrongPW[Wrong password<br/>fails++<br/>401 with tries left]
+    
+    CorrectPW[Password matches<br/>constant-time<br/>issue sb_session cookie]
+    
+    ProtectedPath{Route matched?}
+    
+    PublicGET[GET / → 200<br/>public landing]
+    
+    AuthProbe[GET /api/auth →<br/>{mode: password}]
+    
+    RunAPI[POST /api/run →<br/>start_run()<br/>agent loop]
+    
+    RunsAPI[GET /api/runs →<br/>read board.json]
+    
+    Denied[401 password required]
+    
+    Start --> AuthGate
+    AuthGate -->|no| NoAuth
+    AuthGate -->|yes| YesAuth
+    YesAuth --> CookieValid
+    CookieValid -->|yes| ProtectedPath
+    CookieValid -->|no| Locked
+    Locked -->|yes| Lockout
+    Locked -->|no| WrongPW
+    WrongPW -->|fails < 5| WrongPW
+    WrongPW -->|fails >= 5| Locked
+    CorrectPW --> ProtectedPath
+    ProtectedPath -->|GET /| PublicGET
+    ProtectedPath -->|GET /api/auth| AuthProbe
+    ProtectedPath -->|POST /api/run| RunAPI
+    ProtectedPath -->|GET /api/runs| RunsAPI
+    ProtectedPath -->|other| Denied
+    
+    classDef entry fill:#4be,stroke:#333,stroke-width:2px;
+```
+
+---
+
+## How It's Running Now
+
+| Item | Value |
+|---|---|
+| **Instance** | EC2 t3.micro, `ap-south-1` |
+| **Public URL** | `https://experiencing-occupied-sea-footage.trycloudflare.com` |
+| **Password** | `thisisthepass@344##d` |
+| **TLS** | Real cert — Google Trust Services, valid to Nov 5 2026 |
+| **Box listener** | `127.0.0.1:8080` only (loopback) |
+| **Security group** | `tcp/22` from your IP only — **no inbound port opened** |
+| **UI systemd unit** | `siliconboard-ui` — `active`, `enabled` |
+| **Tunnel systemd unit** | `siliconboard-tunnel` — `active`, `enabled`, `Restart=always` |
+| **Box uptime** | 1+ week |
+| **Sessions** | In-memory, 12-hour TTL, `HttpOnly; SameSite=Strict` cookie |
+
+**How it's running:** `deploy/deploy.sh` installs the Python server as `siliconboard-ui` and `cloudflared` as `siliconboard-tunnel`, both as systemd units with `Restart=always`. The server binds loopback only; the tunnel dials outbound to Cloudflare. The password gate is enforced on every API call — wrong passwords increment a strike counter, and five strikes lock the gate for 60 seconds. The live URL requires `thisisthepass@344##d` to unlock.
+
+---
+
+## What Runs on EC2 — And How It Connects to UI and LLMs
+
+```mermaid
+flowchart TB
+    %% External actors
+    Mentor((Mentor / User)):::actor
+    CF[Cloudflare Edge<br/>HTTPS termination]:::edge
+
+    %% AWS EC2 boundary
+    subgraph AWS["AWS EC2 t3.micro · ap-south-1"]
+        direction TB
+
+        %% Loopback network boundary inside box
+        subgraph Box["Ubuntu Box (loopback-only)"]
+            direction LR
+
+            subgraph UI_Process["UI Layer"]
+                UI["ui/server.py<br/>Python ThreadingHTTPServer<br/>127.0.0.1:8080"]:::server
+                Auth[Password Gate<br/>SB_UI_PASSWORD check<br/>5-strike lockout<br/>HttpOnly cookie]:::gate
+                UI -.-> Auth
+            end
+
+            subgraph Tunnel_Process["Tunnel Layer"]
+                CT[cloudflared<br/>systemd: siliconboard-tunnel<br/>outbound only]:::infra
+            end
+
+            subgraph Harness["Custom LLM Harness (in-process)"]
+                direction TB
+                Orch[Orchestrator<br/>forward/backward routing<br/>retry policy]:::llm
+                Spec[Spec Agent<br/>plain English → spec]
+                RTL[RTL Agent<br/>spec → Verilog]
+                Lint[Lint Agent<br/>Verilog → lint PASS]
+                TB[Testbench Agent<br/>module → testbench]
+                Sim[Simulate Agent<br/>iverilog run]
+                Debug[Debug Agent<br/>failure → patch RTL]
+                Synth[Synthesize Agent<br/>yosys stat → cells]
+                STA[Timing Agent<br/>OpenSTA → slack]
+                Report[Report Agent<br/>artifacts → report.md]
+                Orch --> Spec
+                Spec --> RTL
+                RTL --> Lint
+                Lint -->|fail| Debug
+                Lint -->|pass| TB
+                TB --> Sim
+                Sim -->|fail| Debug
+                Sim -->|pass| Synth
+                Debug --> RTL
+                Synth --> STA
+                STA -->|fail| Debug
+                STA -->|pass| Report
+            end
+
+            subgraph EDA_Container["EDA Tool Container<br/>docker: siliconboard/eda:1.0"]
+                Yosys[Yosys<br/>synthesis + stat]
+                Verilator[Verilator<br/>lint + simulation]
+                Icarus[Icarus Verilog<br/>testbench simulation]
+                OpenSTA[OpenSTA<br/>timing slack]
+            end
+
+            Store[(runs/<id>/<br/>board.json<br/>full design history)]
+        end
+
+        %% Connections inside AWS
+        CT <-->|outbound TCP 443| CF
+        UI <-->|loopback TCP| CT
+        UI -.->|auth gate + API| Orch
+        Orch -.->|LLM calls| LLM[LLM Providers<br/>Gemini → Groq → NVIDIA<br/>fallback chain]:::ext
+        Harness -.->|tool calls| EDA_Container
+        Orch -.->|persist| Store
+        UI -.->|read| Store
+    end
+
+    %% External connections
+    Mentor -->|HTTPS + password| CF
+
+    classDef actor fill:#f96,stroke:#333,stroke-width:2px;
+    classDef edge fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef server fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef gate fill:#fcc,stroke:#333,stroke-width:2px;
+    classDef infra fill:#dfd,stroke:#333,stroke-width:2px;
+    classDef llm fill:#ffd,stroke:#333,stroke-width:2px;
+    classDef ext fill:#dff,stroke:#333,stroke-width:2px;
+```
+
+### How the EC2 pieces connect
+
+| Layer | Process | How it connects |
+|---|---|---|
+| **Edge** | Cloudflare Edge | Terminates TLS, forwards to tunnel over TCP 443 |
+| **Tunnel** | `cloudflared` (systemd: `siliconboard-tunnel`) | Dials outbound to Cloudflare; forwards to `127.0.0.1:8080` on loopback |
+| **UI** | `ui/server.py` (systemd: `siliconboard-ui`) | Binds `127.0.0.1:8080` only; enforces password gate on every API call |
+| **Auth** | `SB_UI_PASSWORD` check | Constant-time compare, 5-strike lockout, `sb_session` cookie (HttpOnly, SameSite=Strict, 12h TTL) |
+| **LLM Harness** | `orchestrator.py` (in-process) | Runs inside the same Python process as the UI; agents call LLM providers via `llm.py` |
+| **LLM Providers** | Gemini → Groq → NVIDIA | Primary provider Gemini, fallback chain if rate-limited or out of credits |
+| **EDA Container** | `siliconboard/eda:1.0` | Yosys, Verilator, Icarus Verilog, OpenSTA — tools decide, LLMs propose |
+| **Storage** | `runs/<id>/board.json` | Full design history persisted to disk, read by UI for timeline/output tabs |
+
+### Data path from mentor click to LLM result
+
+1. **Mentor opens** `https://experiencing-occupied-sea-footage.trycloudflare.com` — Cloudflare terminates TLS.
+2. **Password gate** — `POST /api/login` with `thisisthepass@344##d`; server sets `sb_session` cookie.
+3. **Run pipeline** — `POST /api/run` with spec + run-id; UI verifies cookie, hands off to `orchestrator.start_run()`.
+4. **Harness loop** — Spec → RTL → Lint → TB → Sim → Synth → STA → Report, with Debug backtracking on failures.
+5. **LLM calls** — Each agent calls the LLM router (`llm.py`): Gemini primary, Groq/NVIDIA fallback.
+6. **Tool calls** — Lint/Sim/Synth/STA run inside the EDA Docker container; results flow back to agents.
+7. **Persist** — Every step written to `runs/<id>/board.json`; UI reads it for the live timeline and output tabs.
+
+---
+
+## How to Run Locally
+
+### Prerequisites
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+docker build -t siliconboard/eda:1.0 docker/eda   # yosys + verilator + iverilog
+cp .env.example .env && chmod 600 .env             # add GEMINI_API_KEY_1..4
+.venv/bin/python main.py doctor                    # keys, docker, tool versions
+```
+
+### Option A — SSH Tunnel (local development)
+
+```bash
+# Terminal 1: start the UI server
+SB_UI_PASSWORD='your-password' .venv/bin/python ui/server.py --port 8080
+
+# Terminal 2: open the tunnel
+bash ui/tunnel.sh
+# prints: http://localhost:8080/?t=<token>
+```
+
+### Option B — Cloudflare Tunnel (published link, no open ports)
+
+```bash
+UI_PASSWORD='your-password' bash deploy/deploy.sh
+# Pass 1: sets SB_UI_PASSWORD in /etc/siliconboard/env, installs services
+# Pass 2: re-deploys without recreating the box (SKIP_STA=1)
+# Prints: https://…trycloudflare.com
+```
+
+### Without password (token mode, local dev only)
+
+```bash
+.venv/bin/python ui/server.py --port 8080
+# prints: http://127.0.0.1:8080/?t=<token>
+# Share that exact URL — the token is the credential
+```
+
+---
+
