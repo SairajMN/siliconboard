@@ -15,6 +15,104 @@ provider doesn't stop a run.
 No agent framework: no LangChain, no LangGraph, no CrewAI, no ADK. The loop,
 the routing and the retry policy live in `orchestrator.py` and are ours.
 
+## EC2 Infrastructure — What Runs Where and How It Connects
+
+```mermaid
+flowchart TB
+    subgraph EC2["AWS EC2 t3.micro (ap-south-1)"]
+        direction TB
+        subgraph Box["Ubuntu Box"]
+            direction LR
+            subgraph Services["Systemd Services"]
+                UI["ui/server.py<br/>127.0.0.1:8080"]
+                Tunnel["cloudflared<br/>siliconboard-tunnel"]
+            end
+            UI <-->|loopback TCP| Tunnel
+        end
+
+        subgraph Harness["Custom LLM Harness (in-process)"]
+            direction TB
+            Orch[Orchestrator<br/>forward/backward routing<br/>retry policy]
+            Spec[Spec Agent]
+            RTL[RTL Agent]
+            Lint[Lint Agent]
+            TB[Testbench Agent]
+            Sim[Simulate Agent]
+            Debug[Debug Agent]
+            Synth[Synthesize Agent]
+            STA[Timing Agent]
+            Report[Report Agent]
+            Orch --> Spec
+            Spec --> RTL
+            RTL --> Lint
+            Lint -->|fail| Debug
+            Lint -->|pass| TB
+            TB --> Sim
+            Sim -->|fail| Debug
+            Sim -->|pass| Synth
+            Debug --> RTL
+            Synth --> STA
+            STA -->|fail| Debug
+            STA -->|pass| Report
+        end
+
+        subgraph EDA["EDA Container"]
+            direction TB
+            Yosys[Yosys<br/>synthesis]
+            Verilator[Verilator<br/>lint + sim]
+            Icarus[Icarus Verilog<br/>cross-sim]
+            OpenSTA[OpenSTA<br/>timing analysis]
+        end
+
+        Store[(runs/<id>/board.json)]
+
+        UI -->|auth gate + API| Harness
+        Harness -->|tool calls| EDA
+        UI -.-> Store
+        Harness -.-> Store
+    end
+
+    subgraph Edge["Cloudflare Edge"]
+        CF[Cloudflare Edge<br/>TLS termination]
+    end
+
+    subgraph LLMs["LLM Providers (External)"]
+        direction TB
+        Gemini[Gemini<br/>primary]
+        Groq[Groq<br/>fallback 1]
+        NVIDIA[NVIDIA<br/>fallback 2]
+    end
+
+    Mentor((Mentor Browser)) -->|HTTPS<|end|> CF
+    CF -->|outbound tunnel| Tunnel
+    Tunnel -->|loopback TCP| UI
+    Harness -->|LLM calls| Gemini
+    Gemini -->|rate limited| Groq
+    Groq -->|rate limited| NVIDIA
+
+    subgraph Storage["Persistent Storage"]
+        Runs[runs/<id>/board.json<br/>full design history]
+    end
+
+    UI -.-> Runs
+    Harness -.-> Runs
+```
+
+**What runs where:**
+- **EC2 t3.micro (ap-south-1)**: Ubuntu box running two systemd services — `siliconboard-ui` (Python stdlib server on 127.0.0.1:8080) and `siliconboard-tunnel` (cloudflared)
+- **Cloudflare Edge**: Terminates TLS, forwards to tunnel over TCP 443
+- **LLM Providers**: Gemini (primary), Groq (fallback 1), NVIDIA (fallback 2) — external, called via HTTP API
+- **EDA Container**: Docker container with Yosys, Verilator, Icarus Verilog, OpenSTA — tools decide correctness
+- **Storage**: `runs/<id>/board.json` — full design history persisted to disk
+
+**Connection flow:**
+1. Mentor browser → Cloudflare Edge (HTTPS) → outbound tunnel → 127.0.0.1:8080 (UI)
+2. UI verifies password gate → hands off to Orchestrator in same process
+3. Orchestrator dispatches agents → agents call LLM providers (Gemini → Groq → NVIDIA fallback)
+4. Lint/Sim/Synth/STA agents call EDA tools inside Docker container
+5. Every step written to `runs/<id>/board.json`; UI reads it for live timeline
+
+---
 ## Quickstart
 
 ```bash
