@@ -198,18 +198,18 @@ def check_password_gate() -> None:
     """Password configured: it replaces the token, lockout holds, sessions expire."""
     original = server.PASSWORD
     try:
-        server.PASSWORD = "thisisthepass@344##d"
+        server.PASSWORD = "sam12@QWERTY43e"
         server.LOGIN.update(fails=0, locked_until=0.0)
 
-        assert server.check_password("thisisthepass@344##d") is True
+        assert server.check_password("sam12@QWERTY43e") is True
         assert server.check_password("wrong-pass") is False
-        assert server.check_password("thisisthepass@344##d ") is False  # exact, no trim
+        assert server.check_password("sam12@QWERTY43e ") is False  # exact, no trim
 
         # five strikes lock the gate, and the right password stays out while locked
         for _ in range(server.LOGIN_MAX_FAILS - 1):
             assert server.check_password("wrong-pass") is False
         assert server.login_locked() is True
-        assert server.check_password("thisisthepass@344##d") is False
+        assert server.check_password("sam12@QWERTY43e") is False
 
         # the page is told which gate to show, nothing more
         assert server.auth_payload(False) == {"mode": "password", "session": False}
